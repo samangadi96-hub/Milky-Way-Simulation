@@ -3,26 +3,19 @@ from pathlib import Path
 
 from blackhole import BlackHole
 
-
 class MilkyWaySimulation(mglw.WindowConfig):
 
     gl_version = (3, 3)
     title = "Milky Way Simulation"
-
     window_size = (1280, 720)
     resizable = True
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
-        # Create Black Hole
-       
         self.blackhole = BlackHole()
 
-        # Load Shaders
-       
         BASE_DIR = Path(__file__).parent
-
         with open(BASE_DIR / "shaders" / "vertex.glsl") as f:
             vertex_shader = f.read()
 
@@ -35,78 +28,60 @@ class MilkyWaySimulation(mglw.WindowConfig):
         )
 
         # EVENT HORIZON
-      
-
         event_vertices = self.blackhole.generate_event_horizon()
-
         self.event_vbo = self.ctx.buffer(event_vertices.tobytes())
-
-        self.event_vao = self.ctx.vertex_array(
-            self.program,
-            [
-                (self.event_vbo, "2f", "in_position")
-            ]
-        )
+        self.event_vao = self.ctx.vertex_array(self.program, [(self.event_vbo, "2f", "in_position")])
 
         # PHOTON RING
-      
-
         photon_vertices = self.blackhole.generate_photon_ring()
-
         self.photon_vbo = self.ctx.buffer(photon_vertices.tobytes())
+        self.photon_vao = self.ctx.vertex_array(self.program, [(self.photon_vbo, "2f", "in_position")])
 
-        self.photon_vao = self.ctx.vertex_array(
-            self.program,
-            [
-                (self.photon_vbo, "2f", "in_position")
-            ]
-        )
-
-        # ACCRETION DISK
-
+        # ACCRETION DISK (Squished for 3D tilt)
         disk_vertices = self.blackhole.generate_accretion_disk()
-
         self.disk_vbo = self.ctx.buffer(disk_vertices.tobytes())
+        self.disk_vao = self.ctx.vertex_array(self.program, [(self.disk_vbo, "2f", "in_position")])
 
-        self.disk_vao = self.ctx.vertex_array(
-            self.program,
-            [
-                (self.disk_vbo, "2f", "in_position")
-            ]
-        )
+        # GRAVITATIONAL LENSING HALO (Circular)
+        halo_vertices = self.blackhole.generate_lensing_halo()
+        self.halo_vbo = self.ctx.buffer(halo_vertices.tobytes())
+        self.halo_vao = self.ctx.vertex_array(self.program, [(self.halo_vbo, "2f", "in_position")])
 
-        # Enable alpha blending for the gradient ring
+        # Enable alpha blending
         self.ctx.enable(self.ctx.BLEND)
         self.ctx.blend_func = self.ctx.SRC_ALPHA, self.ctx.ONE_MINUS_SRC_ALPHA
 
-
     def on_render(self, time, frametime):
+        self.ctx.clear(0.02, 0.02, 0.03)
 
-        # Background
-        self.ctx.clear(0.15, 0.15, 0.18)
+        if "u_time" in self.program:
+            self.program["u_time"].value = time
 
-        # Draw Accretion Disk (Stage 4) — behind everything
+        # 1. Halo (Lensing) - Background
+        self.program["useGradient"].value = 3
+        self.program["innerRadius"].value = self.blackhole.event_horizon_radius
+        self.program["outerRadius"].value = self.blackhole.outer_disk_radius * 0.8
+        self.program["aspectRatio"].value = self.blackhole.aspect_ratio
+        self.halo_vao.render(mode=self.ctx.TRIANGLE_STRIP)
+
+        # 2. Accretion Disk - Midground
         self.program["useGradient"].value = 2
         self.program["innerRadius"].value = self.blackhole.inner_disk_radius
         self.program["outerRadius"].value = self.blackhole.outer_disk_radius
         self.program["aspectRatio"].value = self.blackhole.aspect_ratio
-
         self.disk_vao.render(mode=self.ctx.TRIANGLE_STRIP)
 
-        # Draw Photon Ring (Stage 3: gradient yellow -> orange -> transparent)
+        # 3. Photon Ring - Foreground
         self.program["useGradient"].value = 1
         self.program["innerRadius"].value = self.blackhole.event_horizon_radius
         self.program["outerRadius"].value = self.blackhole.photon_sphere_radius
         self.program["aspectRatio"].value = self.blackhole.aspect_ratio
-
         self.photon_vao.render(mode=self.ctx.TRIANGLE_STRIP)
 
-        # Draw Event Horizon (solid black, no gradient)
+        # 4. Event Horizon - Front Center
         self.program["useGradient"].value = 0
         self.program["objectColor"].value = (0.0, 0.0, 0.0)
-
         self.event_vao.render(mode=self.ctx.TRIANGLE_FAN)
-
 
 if __name__ == "__main__":
     mglw.run_window_config(MilkyWaySimulation)
