@@ -21,12 +21,15 @@ class BlackHole:
         
         self.event_horizon_radius = radius
 
-        # Radius of the bright photon ring
-        self.photon_sphere_radius = radius * 1.25
+        # Radius of the bright photon ring (widened for visible gradient)
+        self.photon_sphere_radius = radius * 2.5
 
-        # These will be used later
+        # Accretion disk radii
         self.inner_disk_radius = radius * 1.6
-        self.outer_disk_radius = radius * 3.0
+        self.outer_disk_radius = radius * 6.0
+
+        # Disk vertical squish (makes it look tilted in 3D)
+        self.disk_squish = 0.12
 
         # Rendering
         self.segments = segments
@@ -113,3 +116,25 @@ class BlackHole:
         self.event_horizon_radius,
         self.photon_sphere_radius
     )
+
+    # Accretion Disk — elliptical ring, squished vertically to fake 3D tilt
+    def generate_accretion_disk(self):
+
+        vertices = []
+
+        for i in range(self.segments + 1):
+
+            theta = 2 * np.pi * i / self.segments
+
+            # Outer ellipse
+            x_outer = (self.outer_disk_radius * np.cos(theta)) / self.aspect_ratio
+            y_outer = self.outer_disk_radius * np.sin(theta) * self.disk_squish
+
+            # Inner ellipse
+            x_inner = (self.inner_disk_radius * np.cos(theta)) / self.aspect_ratio
+            y_inner = self.inner_disk_radius * np.sin(theta) * self.disk_squish
+
+            vertices.extend([x_outer, y_outer])
+            vertices.extend([x_inner, y_inner])
+
+        return np.array(vertices, dtype='f4')
