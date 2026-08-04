@@ -43,10 +43,10 @@ class Camera:
         ) * min(speed * dt, 1.0)
 
         # Smooth azimuth
-        self.azimuth += (
-            self.target_azimuth -
-            self.azimuth
-        ) * min(speed * dt, 1.0)
+        # self.azimuth += (
+        #     self.target_azimuth -
+        #     self.azimuth
+        # ) * min(speed * dt, 1.0)
 
         # Smooth zoom
         self.distance += (
@@ -66,7 +66,7 @@ class Camera:
 
     def look_up(self):
 
-        self.target_inclination -= math.radians(2)
+        self.target_inclination -= math.radians(5)
 
         self.target_inclination = max(
             0.0,
@@ -75,7 +75,7 @@ class Camera:
 
     def look_down(self):
 
-        self.target_inclination += math.radians(2)
+        self.target_inclination += math.radians(5)
 
         self.target_inclination = min(
             math.radians(89.0),
@@ -86,13 +86,13 @@ class Camera:
     # Orbit (Future)
     # ==================================================
 
-    def rotate_left(self):
+    def rotate_left(self, dt):
 
-        self.target_azimuth -= math.radians(2)
+        self.azimuth -= math.radians(60) * dt
 
-    def rotate_right(self):
+    def rotate_right(self, dt):
 
-        self.target_azimuth += math.radians(2)
+        self.azimuth += math.radians(60) * dt
 
     # ==================================================
     # Zoom (Future)

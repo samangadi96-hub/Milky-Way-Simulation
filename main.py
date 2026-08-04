@@ -18,6 +18,7 @@ class MilkyWaySimulation(mglw.WindowConfig):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        print("Window created")
         print(type(self.wnd))
         # ==========================================================
         # Scene Objects
@@ -25,6 +26,10 @@ class MilkyWaySimulation(mglw.WindowConfig):
 
         self.blackhole = BlackHole()
         self.camera = Camera()
+        self.move_up = False
+        self.move_down = False
+        self.move_left = False
+        self.move_right = False
 
         BASE_DIR = Path(__file__).parent
 
@@ -139,43 +144,70 @@ class MilkyWaySimulation(mglw.WindowConfig):
     # ==============================================================
     # Keyboard Controls
     # ==============================================================
-   
+    
     def key_event(self, key, action, modifiers):
 
-        if action not in (
-            self.wnd.keys.ACTION_PRESS,
-            self.wnd.keys.ACTION_REPEAT,
-        ):
-            return
+        if action == self.wnd.keys.ACTION_PRESS:
 
-        if key in (
-            self.wnd.keys.W,
-            self.wnd.keys.UP,
-        ):
-            self.camera.look_up()
+            if key in (self.wnd.keys.W, self.wnd.keys.UP):
+                self.move_up = True
 
-        elif key in (
-            self.wnd.keys.S,
-            self.wnd.keys.DOWN,
-        ):
-            self.camera.look_down()
+            elif key in (self.wnd.keys.S, self.wnd.keys.DOWN):
+                self.move_down = True
 
-    # ==============================================================
+            elif key in (self.wnd.keys.A, self.wnd.keys.LEFT):
+                self.move_left = True
+
+            elif key in (self.wnd.keys.D, self.wnd.keys.RIGHT):
+                self.move_right = True
+
+        elif action == self.wnd.keys.ACTION_RELEASE:
+
+            if key in (self.wnd.keys.W, self.wnd.keys.UP):
+                self.move_up = False
+
+            elif key in (self.wnd.keys.S, self.wnd.keys.DOWN):
+                self.move_down = False
+
+            elif key in (self.wnd.keys.A, self.wnd.keys.LEFT):
+                self.move_left = False
+
+            elif key in (self.wnd.keys.D, self.wnd.keys.RIGHT):
+                self.move_right = False
+   # ==============================================================
     # Render Loop
     # ==============================================================
 
     def on_render(self, time, frametime):
 
+        keys = self.wnd.keys
         bh = self.blackhole
 
-        # Update Camera
-        self.camera.update(frametime)
+        if self.wnd.is_key_pressed(keys.W):
+            print("W is held")
+            self.camera.look_up()
+
+        if self.wnd.is_key_pressed(keys.S):
+            print("S is held")
+            self.camera.look_down()
         
+        if self.wnd.is_key_pressed(keys.A):
+            print("A is held")
+            self.camera.rotate_left(frametime)
+
+        if self.wnd.is_key_pressed(keys.D):
+            print("D is held")
+            self.camera.rotate_right(frametime)
+
+        self.camera.update(frametime)
+
         print(
-            f"Current: {math.degrees(self.camera.inclination):.2f}",
+            f"Azimuth = {math.degrees(self.camera.azimuth):.2f}",
             end="\r"
         )
+        
         # ----------------------------------------------------------
+        # PASS 1 (Keep the rest of your render code exactly the same below here)
         # PASS 1
         # Render Scene
         # ----------------------------------------------------------
@@ -184,16 +216,30 @@ class MilkyWaySimulation(mglw.WindowConfig):
 
         self.ctx.clear(0.0, 0.0, 0.0, 1.0)
 
-        self.program["u_time"].value = time
-        self.program["aspectRatio"].value = bh.aspect_ratio
+        # Send all physical parameters as uniforms ONLY if the shader is actively using them
+        if "u_time" in self.program:
+            self.program["u_time"].value = time
+            
+        if "aspectRatio" in self.program:
+            self.program["aspectRatio"].value = bh.aspect_ratio
+            
+        if "u_eventHorizon" in self.program:
+            self.program["u_eventHorizon"].value = bh.event_horizon_radius
+            
+        if "u_photonSphere" in self.program:
+            self.program["u_photonSphere"].value = bh.photon_sphere_radius
+            
+        if "u_innerDisk" in self.program:
+            self.program["u_innerDisk"].value = bh.inner_disk_radius
+            
+        if "u_outerDisk" in self.program:
+            self.program["u_outerDisk"].value = bh.outer_disk_radius
+            
+        if "u_diskSquish" in self.program:
+            self.program["u_diskSquish"].value = self.camera.disk_squish
 
-        self.program["u_eventHorizon"].value = bh.event_horizon_radius
-        self.program["u_photonSphere"].value = bh.photon_sphere_radius
-
-        self.program["u_innerDisk"].value = bh.inner_disk_radius
-        self.program["u_outerDisk"].value = bh.outer_disk_radius
-
-        self.program["u_diskSquish"].value = self.camera.disk_squish
+        if "u_azimuth" in self.program:
+            self.program["u_azimuth"].value = self.camera.azimuth
 
         self.main_quad_vao.render(mode=self.ctx.TRIANGLE_STRIP)
 

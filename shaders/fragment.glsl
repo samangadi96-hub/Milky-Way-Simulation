@@ -2,158 +2,187 @@
 
 uniform float aspectRatio;
 uniform float u_time;
-uniform float u_eventHorizon;
-uniform float u_photonSphere;
+uniform float u_diskSquish;
 uniform float u_innerDisk;
 uniform float u_outerDisk;
-uniform float u_diskSquish;
+uniform float u_azimuth;
 
 in vec2 frag_pos;
 out vec4 fragColor;
 
-// Smooth hash - no grid artifacts
+// ==========================================
+// UTILITIES & NOISE
+// ==========================================
 float hash(vec2 p) {
     vec3 p3 = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));
     p3 += dot(p3, p3.yzx + 33.33);
     return fract((p3.x + p3.y) * p3.z);
 }
 
-float noise(vec2 p) {
-    vec2 i = floor(p);
-    vec2 f = fract(p);
-    vec2 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
-    float a = hash(i);
-    float b = hash(i + vec2(1.0, 0.0));
-    float c = hash(i + vec2(0.0, 1.0));
-    float d = hash(i + vec2(1.0, 1.0));
-    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+// 3D Hash for Volumetric Gas
+float hash3D(vec3 p) {
+    p = fract(p * vec3(0.1031, 0.1030, 0.0973));
+    p += dot(p, p.yxz + 33.33);
+    return fract((p.x + p.y) * p.z);
 }
 
-// fBm with 4 octaves
-float fbm(vec2 p) {
-    float v = 0.0, a = 0.5;
-    for (int i = 0; i < 4; i++) {
-        v += a * noise(p);
+// 3D Noise function for gas turbulence
+float noise3D(vec3 p) {
+    vec3 i = floor(p);
+    vec3 f = fract(p);
+    vec3 u = f * f * (3.0 - 2.0 * f);
+    
+    float n = mix(
+        mix(mix(hash3D(i + vec3(0,0,0)), hash3D(i + vec3(1,0,0)), u.x),
+            mix(hash3D(i + vec3(0,1,0)), hash3D(i + vec3(1,1,0)), u.x), u.y),
+        mix(mix(hash3D(i + vec3(0,0,1)), hash3D(i + vec3(1,0,1)), u.x),
+            mix(hash3D(i + vec3(0,1,1)), hash3D(i + vec3(1,1,1)), u.x), u.y), u.z);
+    return n;
+}
+
+// 4-Octave 3D fBm
+float fbm3D(vec3 p) {
+    float f = 0.0;
+    float amp = 0.5;
+    for(int i = 0; i < 4; i++) {
+        f += amp * noise3D(p);
         p *= 2.0;
-        a *= 0.5;
+        amp *= 0.5;
     }
-    return v;
+    return f;
 }
 
-// Constant, visible, Interstellar-style rotation
-// - Near-rigid rotation (very mild differential) so structure never winds up
-// - Strong logarithmic spiral for persistent arms
-// - Moderate speed so features stay clearly trackable
-// - Phase wrapping so it never glitches
-float swirling_gas(float angle, float dist, float time_offset) {
-    // Near-rigid rotation with only a gentle inner speed-up
-    // This is the key change that stops the winding into concentric rings
-    float orbital_speed = 0.65 * (1.0 + 0.25 / max(dist, 0.08));
-
-    // Phase always bounded
-    const float TWO_PI = 6.283185307179586;
-    float phase = mod(u_time * orbital_speed + time_offset, TWO_PI);
-    float rotated = angle + phase;
-
-    // Strong logarithmic spiral → persistent large-scale trailing arms
-    float spiral = rotated - 2.8 * log(max(dist, 0.03));
-
-    // Large-scale features + gentle radial drift
-    vec2 polar_uv = vec2(spiral * 1.05, dist * 3.8 - u_time * 0.06);
-
-    return fbm(polar_uv);
+// --- PROCEDURAL STARFIELD ---
+vec3 get_stars(vec2 p) {
+    p += vec2(12.34, 56.78); 
+    vec2 id = floor(p * 90.0);
+    vec2 f = fract(p * 90.0);
+    float star = smoothstep(0.96, 1.0, hash(id));
+    star *= smoothstep(0.5, 0.1, length(f - 0.5));
+    vec3 color = mix(vec3(0.6, 0.8, 1.0), vec3(1.0, 0.7, 0.4), hash(id + 1.0));
+    return color * star * 4.0; 
 }
 
 void main()
 {
     vec2 uv = vec2(frag_pos.x * aspectRatio, frag_pos.y);
 
-    float dist = length(uv);
-    float angle = atan(uv.y, uv.x);
+    // 1. 3D CAMERA SETUP 
+    float Rs = 1.0;
 
-    float y_local = abs(uv.y) / max(u_diskSquish, 0.02);
+    float cam_height = mix(0.1, 5.0, max(u_diskSquish, 0.02));
+    float cam_radius = 12.0;
 
-    float r_eh = u_eventHorizon;
-    float r_ps = u_photonSphere;
-    float r_in = u_innerDisk;
-    float r_out = u_outerDisk;
+    vec3 ray_origin = vec3(
+        sin(u_azimuth) * cam_radius,
+        cam_height,
+        cos(u_azimuth) * cam_radius
+    );
 
-    // Event horizon
-    if (dist < r_eh) {
-        fragColor = vec4(0.0, 0.0, 0.0, 1.0);
-        return;
+    vec3 forward = normalize(vec3(0.0) - ray_origin);
+    vec3 right = normalize(cross(vec3(0.0, 1.0, 0.0), forward));
+    vec3 up = cross(forward, right);
+
+    float fov_zoom = 2.0; 
+    vec3 ray_dir = normalize(forward * fov_zoom + uv.x * right + uv.y * up);
+
+    // 2. PHYSICS ENGINE & VOLUMETRIC VARIABLES
+    float dt = 0.1;        
+    int max_steps = 300; 
+    
+    vec3 p = ray_origin; 
+    vec3 v = ray_dir;
+
+    vec3 L = cross(p, v);
+    float h2 = dot(L, L); 
+
+    bool hit_black_hole = false;
+    vec3 accumulated_gas_color = vec3(0.0);
+    float transmittance = 1.0; // How much background light makes it through the gas
+
+    // Gas Color Palette
+    vec3 hot_white = vec3(1.0, 0.95, 0.8);
+    vec3 bright_orange = vec3(1.0, 0.4, 0.05);
+    vec3 dark_red = vec3(0.4, 0.05, 0.0);
+
+    // 3. THE GEODESIC RAY-MARCHING LOOP
+    for (int i = 0; i < max_steps; i++) {
+        float r2 = dot(p, p);
+        float r = sqrt(r2);
+
+        if (r < Rs) {
+            hit_black_hole = true;
+            break;
+        }
+
+        if (r > 20.0) break; 
+
+        // ==========================================
+        // VOLUMETRIC ACCRETION DISK SAMPLING
+        // ==========================================
+        // Only calculate gas if we are near the equator and within the disk radius
+        if (abs(p.y) < 0.5 && r > 2.5 && r < 12.0) {
+            
+            // Keplerian Rotation: inner gas orbits much faster than outer gas
+            float orbital_velocity = 2.0 * pow(r, -1.5); 
+            float angle = atan(p.z, p.x) + u_time * orbital_velocity;
+            
+            // Rotate the sampling coordinates to simulate fluid motion
+            vec3 sampling_pos = vec3(r * cos(angle), p.y, r * sin(angle));
+
+            // Density calculation: Thicker in middle, falls off at edges
+            float vertical_falloff = exp(-(p.y * p.y) * 20.0);
+            float radial_falloff = smoothstep(2.5, 4.0, r) * (1.0 - smoothstep(8.0, 12.0, r));
+            
+            // Apply 3D turbulent noise to the rotating volume
+            float noise = fbm3D(sampling_pos * 1.5 - vec3(0.0, u_time * 0.2, 0.0));
+            float density = vertical_falloff * radial_falloff * noise * 2.5;
+
+            if (density > 0.05) {
+                // Color Gradient based on distance (Hotter near the black hole)
+                float temp = clamp(1.0 - (r - 2.5) / 7.0, 0.0, 1.0);
+                vec3 local_color = mix(dark_red, bright_orange, temp);
+                local_color = mix(local_color, hot_white, pow(temp, 3.0));
+
+                // Relativistic Doppler Beaming (Approximation)
+                // Gas moving towards the camera is on the left (-x side generally)
+                float doppler = 1.0 + 0.8 * (p.x / r) * min(1.0, 5.0/r); 
+                local_color *= pow(doppler, 3.0); // Doppler boosts brightness exponentially
+
+                // Accumulate the glowing gas
+                accumulated_gas_color += local_color * density * dt * transmittance * 5.0;
+                
+                // The gas absorbs light behind it (makes the disk opaque)
+                transmittance *= exp(-density * dt * 2.0);
+            }
+        }
+
+        // ==========================================
+        // GENERAL RELATIVITY (Spacetime Curvature)
+        // ==========================================
+        vec3 acceleration = -1.5 * Rs * h2 / (r2 * r2 * r) * p;
+        v += acceleration * dt;
+        v = normalize(v); 
+        p += v * dt;
+        
+        // Early exit if the gas becomes completely opaque
+        if (transmittance < 0.01) break; 
     }
 
-    vec3 hot_white    = vec3(1.0, 0.96, 0.88);
-    vec3 bright_orange = vec3(1.0, 0.55, 0.05);
-    vec3 deep_orange  = vec3(0.85, 0.30, 0.0);
-    vec3 dark_red     = vec3(0.35, 0.08, 0.0);
+    // 4. FINAL COMPOSITING
+    vec3 final_color = vec3(0.0);
 
-    vec3 total = vec3(0.0);
-
-    float eh_fade = smoothstep(r_eh, r_eh * 1.08, dist);
-
-    // Density field
-    float thickness = mix(0.015, 0.04, clamp((dist - r_in) / (r_out - r_in), 0.0, 1.0));
-    float disk_vert = exp(-(y_local * y_local) / (2.0 * thickness * thickness));
-
-    float disk_radial = smoothstep(r_in * 0.8, r_in * 1.05, dist)
-                      * (1.0 - smoothstep(r_out * 0.75, r_out * 1.15, dist));
-    disk_radial = pow(disk_radial, 0.45);
-
-    float disk_density = disk_vert * disk_radial * eh_fade;
-
-    float halo_width  = (r_out - r_eh) * 0.35;
-    float halo_center = r_ps * 1.2;
-    float halo_r = dist - halo_center;
-    float halo_radial = exp(-(halo_r * halo_r) / (2.0 * halo_width * halo_width));
-    halo_radial *= smoothstep(r_eh, r_eh * 1.2, dist);
-    halo_radial *= 1.0 - smoothstep(r_out * 0.7, r_out * 1.3, dist);
-
-    float halo_density = halo_radial * (1.0 - disk_density * 0.8) * eh_fade * 0.55;
-
-    float total_density = disk_density + halo_density;
-
-    if (total_density > 0.005) {
-        float disk_weight = disk_density / max(total_density, 0.001);
-
-        float disk_gas = swirling_gas(angle, dist, 0.0);
-        float halo_gas = swirling_gas(-angle, dist, 3.14);
-        float gas = mix(halo_gas, disk_gas, disk_weight);
-
-        // Doppler beaming
-        float disk_doppler = 1.0 + 0.4 * cos(angle);
-        float halo_doppler = 1.0 - 0.25 * cos(angle);
-        float doppler = mix(halo_doppler, disk_doppler, disk_weight);
-
-        float color_t = clamp((dist - r_eh) / (r_out - r_eh), 0.0, 1.0);
-        vec3 color = mix(deep_orange, dark_red, pow(color_t, 0.5));
-
-        float white_blend = smoothstep(1.15, 1.4, doppler) * (1.0 - color_t) * 0.7;
-        color = mix(color, hot_white, white_blend);
-
-        float gas_mod = 0.35 + 1.30 * gas;
-        color *= gas_mod * doppler;
-
-        total += color * (total_density * gas_mod);
+    if (hit_black_hole) {
+        // Event horizon is pure black, but we add the gas we saw on the way in
+        final_color = accumulated_gas_color; 
+    } else {
+        vec2 sky_uv = vec2(atan(v.z, v.x), asin(clamp(v.y, -1.0, 1.0)));
+        vec3 background_stars = get_stars(sky_uv * 10.0);
+        
+        // We multiply the background stars by the transmittance (opacity) of the gas, 
+        // then add the glowing gas on top. 
+        final_color = (background_stars * transmittance) + accumulated_gas_color;
     }
 
-    // Photon ring
-    {
-        float ring_r = (r_eh + r_ps) * 0.52;
-        float ring_w = (r_ps - r_eh) * 0.12;
-        float d = abs(dist - ring_r);
-        float peak = exp(-(d * d) / (2.0 * ring_w * ring_w));
-        float glow  = exp(-(d * d) / (2.0 * (ring_w * 6.0) * (ring_w * 6.0))) * 0.12;
-
-        float shimmer_speed = 8.0;
-        float shimmer = 0.92 + 0.08 * sin(angle * 3.0 + u_time * shimmer_speed)
-                                    * sin(angle * 5.0 - u_time * shimmer_speed * 0.7);
-
-        float intensity = (peak + glow) * eh_fade * shimmer;
-        vec3 ring_color = mix(bright_orange, hot_white, peak);
-        total += ring_color * intensity;
-    }
-
-    fragColor = vec4(total, 1.0);
+    fragColor = vec4(final_color, 1.0);
 }
