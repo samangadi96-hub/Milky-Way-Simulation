@@ -102,12 +102,12 @@ class Camera:
 
         self.target_distance = max(
             0.3,
-            self.target_distance - 0.1
+            self.target_distance - 0.02
         )
 
     def zoom_out(self):
 
         self.target_distance = min(
             10.0,
-            self.target_distance + 0.1
+            self.target_distance + 0.02
         )

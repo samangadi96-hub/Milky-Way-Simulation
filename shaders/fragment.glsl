@@ -6,6 +6,7 @@ uniform float u_diskSquish;
 uniform float u_innerDisk;
 uniform float u_outerDisk;
 uniform float u_azimuth;
+uniform float u_camDistance;
 
 in vec2 frag_pos;
 out vec4 fragColor;
@@ -67,11 +68,11 @@ void main()
 {
     vec2 uv = vec2(frag_pos.x * aspectRatio, frag_pos.y);
 
-    // 1. 3D CAMERA SETUP 
+    // 1. 3D CAMERA SETUP
     float Rs = 1.0;
 
     float cam_height = mix(0.1, 5.0, max(u_diskSquish, 0.02));
-    float cam_radius = 12.0;
+    float cam_radius = u_camDistance * 12.0;  // Scale the base distance of 12.0
 
     vec3 ray_origin = vec3(
         sin(u_azimuth) * cam_radius,
@@ -115,7 +116,7 @@ void main()
             break;
         }
 
-        if (r > 20.0) break; 
+        if (r > cam_radius + 50.0) break; 
 
         // ==========================================
         // VOLUMETRIC ACCRETION DISK SAMPLING

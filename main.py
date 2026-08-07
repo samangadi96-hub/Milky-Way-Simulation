@@ -199,6 +199,14 @@ class MilkyWaySimulation(mglw.WindowConfig):
             print("D is held")
             self.camera.rotate_right(frametime)
 
+        if self.wnd.is_key_pressed(keys.Q):
+            print("Q is held - zoom in")
+            self.camera.zoom_in()
+
+        if self.wnd.is_key_pressed(keys.E):
+            print("E is held - zoom out")
+            self.camera.zoom_out()
+
         self.camera.update(frametime)
 
         print(
@@ -240,6 +248,9 @@ class MilkyWaySimulation(mglw.WindowConfig):
 
         if "u_azimuth" in self.program:
             self.program["u_azimuth"].value = self.camera.azimuth
+
+        if "u_camDistance" in self.program:
+            self.program["u_camDistance"].value = self.camera.distance
 
         self.main_quad_vao.render(mode=self.ctx.TRIANGLE_STRIP)
 
