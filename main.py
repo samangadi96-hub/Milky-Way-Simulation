@@ -6,7 +6,9 @@ import numpy as np
 
 from blackhole import BlackHole
 from camera import Camera
-
+from lod import LODManager
+from renderer import Renderer
+from scene import Galaxy
 
 class MilkyWaySimulation(mglw.WindowConfig):
 
@@ -25,7 +27,10 @@ class MilkyWaySimulation(mglw.WindowConfig):
         # ==========================================================
 
         self.blackhole = BlackHole()
+        self.galaxy = Galaxy()
         self.camera = Camera()
+        self.lod_manager = LODManager()
+
         self.move_up = False
         self.move_down = False
         self.move_left = False
@@ -67,6 +72,7 @@ class MilkyWaySimulation(mglw.WindowConfig):
                 (self.main_quad_buffer, "2f", "in_position")
             ],
         )
+        
 
         # ==========================================================
         # Create Framebuffer
@@ -105,6 +111,41 @@ class MilkyWaySimulation(mglw.WindowConfig):
             ],
         )
 
+        # ==========================================================
+        # Galaxy Shader
+        # ==========================================================
+
+        with open(
+            BASE_DIR / "shaders" / "galaxy_vertex.glsl",
+            encoding="utf-8"
+        ) as f:
+            galaxy_vertex_shader = f.read()
+
+        with open(
+            BASE_DIR / "shaders" / "galaxy_fragment.glsl",
+            encoding="utf-8"
+        ) as f:
+            galaxy_fragment_shader = f.read()
+
+        self.galaxy_program = self.ctx.program(
+    vertex_shader=galaxy_vertex_shader,
+    fragment_shader=galaxy_fragment_shader,
+)
+
+        self.galaxy_vao = self.ctx.vertex_array(
+            self.galaxy_program,
+            [
+                (self.main_quad_buffer, "2f", "in_position")
+            ],
+    )
+
+        self.renderer = Renderer(
+                    self.ctx,
+                    self.program,
+                    self.main_quad_vao,
+                    self.galaxy_program,
+                    self.galaxy_vao
+                )
         # ==========================================================
         # Rendering Settings
         # ==========================================================
@@ -184,33 +225,74 @@ class MilkyWaySimulation(mglw.WindowConfig):
         bh = self.blackhole
 
         if self.wnd.is_key_pressed(keys.W):
-            print("W is held")
             self.camera.look_up()
 
         if self.wnd.is_key_pressed(keys.S):
-            print("S is held")
             self.camera.look_down()
         
         if self.wnd.is_key_pressed(keys.A):
-            print("A is held")
             self.camera.rotate_left(frametime)
 
         if self.wnd.is_key_pressed(keys.D):
-            print("D is held")
             self.camera.rotate_right(frametime)
 
         if self.wnd.is_key_pressed(keys.Q):
-            print("Q is held - zoom in")
             self.camera.zoom_in()
 
         if self.wnd.is_key_pressed(keys.E):
-            print("E is held - zoom out")
             self.camera.zoom_out()
 
         self.camera.update(frametime)
 
+        # ----------------------------------------------------------
+        # LOD
+        # ----------------------------------------------------------
+
+        lod_level = self.lod_manager.get_level(
+        self.camera.distance
+    )
+
+        # ----------------------------------------------------------
+        # Galaxy shader uniforms
+        # ----------------------------------------------------------
+
+        if "u_inclination" in self.galaxy_program:
+            self.galaxy_program["u_inclination"].value = (
+                self.camera.inclination
+            )
+
+        if "u_azimuth" in self.galaxy_program:
+            self.galaxy_program["u_azimuth"].value = (
+                self.camera.azimuth
+            )
+
+        if "u_galaxyRadius" in self.galaxy_program:
+            self.galaxy_program["u_galaxyRadius"].value = (
+                self.galaxy.radius
+            )
+
+        if "u_bulgeRadius" in self.galaxy_program:
+            self.galaxy_program["u_bulgeRadius"].value = (
+                self.galaxy.bulge_radius
+            )
+
+        if "u_armTightness" in self.galaxy_program:
+            self.galaxy_program["u_armTightness"].value = (
+                self.galaxy.arm_tightness
+            )
+
+        if "u_numArms" in self.galaxy_program:
+            self.galaxy_program["u_numArms"].value = (
+                self.galaxy.num_arms
+            )
+        lod_name = self.lod_manager.get_level_name(
+            lod_level
+        )
+
+
         print(
-            f"Azimuth = {math.degrees(self.camera.azimuth):.2f}",
+            f"Distance = {self.camera.distance:.2f} | "
+            f"LOD = {lod_name:<6}",
             end="\r"
         )
         
@@ -252,8 +334,7 @@ class MilkyWaySimulation(mglw.WindowConfig):
         if "u_camDistance" in self.program:
             self.program["u_camDistance"].value = self.camera.distance
 
-        self.main_quad_vao.render(mode=self.ctx.TRIANGLE_STRIP)
-
+        self.renderer.render(lod_level)
         # ----------------------------------------------------------
         # PASS 2
         # Post Processing
