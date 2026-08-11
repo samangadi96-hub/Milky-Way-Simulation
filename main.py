@@ -20,21 +20,34 @@ class MilkyWaySimulation(mglw.WindowConfig):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        print("Window created")
-        print(type(self.wnd))
+
         # ==========================================================
         # Scene Objects
         # ==========================================================
 
-        self.blackhole = BlackHole()
-        self.galaxy = Galaxy()
-        self.camera = Camera()
+        self.blackhole   = BlackHole()
+        self.galaxy      = Galaxy()
+        self.camera      = Camera()
         self.lod_manager = LODManager()
 
-        self.move_up = False
-        self.move_down = False
-        self.move_left = False
+        # Keyboard state flags
+        self.move_up    = False
+        self.move_down  = False
+        self.move_left  = False
         self.move_right = False
+        self._zoom_in   = False
+        self._zoom_out  = False
+
+        print()
+        print('  Milky Way Simulation - Controls')
+        print('  --------------------------------')
+        print('  Mouse Left-drag  -> orbit galaxy')
+        print('  Mouse Scroll     -> zoom in / out')
+        print('  W/S / Up/Down    -> tilt camera')
+        print('  A/D / Left/Right -> rotate camera')
+        print('  Q / E            -> zoom in / out')
+        print('  --------------------------------')
+        print()
 
         BASE_DIR = Path(__file__).parent
 
@@ -173,7 +186,7 @@ class MilkyWaySimulation(mglw.WindowConfig):
     # Window Resize
     # ==============================================================
 
-    def resize(self, width: int, height: int):
+    def on_resize(self, width: int, height: int):
 
         self.scene_tex.release()
         self.fbo.release()
@@ -183,10 +196,26 @@ class MilkyWaySimulation(mglw.WindowConfig):
         self.blackhole.aspect_ratio = width / height
 
     # ==============================================================
+    # Mouse Controls
+    # ==============================================================
+
+    def on_mouse_press_event(self, x: int, y: int, button: int):
+        self.camera.on_mouse_press(x, y, button)
+
+    def on_mouse_release_event(self, x: int, y: int, button: int):
+        self.camera.on_mouse_release(x, y, button)
+
+    def on_mouse_drag_event(self, x: int, y: int, dx: int, dy: int):
+        self.camera.on_mouse_drag(x, y, dx, dy, buttons=1)
+
+    def on_mouse_scroll_event(self, x_offset: float, y_offset: float):
+        self.camera.on_mouse_scroll(0, 0, x_offset, y_offset)
+
+    # ==============================================================
     # Keyboard Controls
     # ==============================================================
-    
-    def key_event(self, key, action, modifiers):
+
+    def on_key_event(self, key, action, modifiers):
 
         if action == self.wnd.keys.ACTION_PRESS:
 
@@ -202,6 +231,12 @@ class MilkyWaySimulation(mglw.WindowConfig):
             elif key in (self.wnd.keys.D, self.wnd.keys.RIGHT):
                 self.move_right = True
 
+            elif key == self.wnd.keys.Q:
+                self._zoom_in = True
+
+            elif key == self.wnd.keys.E:
+                self._zoom_out = True
+
         elif action == self.wnd.keys.ACTION_RELEASE:
 
             if key in (self.wnd.keys.W, self.wnd.keys.UP):
@@ -215,31 +250,36 @@ class MilkyWaySimulation(mglw.WindowConfig):
 
             elif key in (self.wnd.keys.D, self.wnd.keys.RIGHT):
                 self.move_right = False
+
+            elif key == self.wnd.keys.Q:
+                self._zoom_in = False
+
+            elif key == self.wnd.keys.E:
+                self._zoom_out = False
    # ==============================================================
     # Render Loop
     # ==============================================================
 
     def on_render(self, time, frametime):
 
-        keys = self.wnd.keys
         bh = self.blackhole
 
-        if self.wnd.is_key_pressed(keys.W):
+        if self.move_up:
             self.camera.look_up()
 
-        if self.wnd.is_key_pressed(keys.S):
+        if self.move_down:
             self.camera.look_down()
-        
-        if self.wnd.is_key_pressed(keys.A):
+
+        if self.move_left:
             self.camera.rotate_left(frametime)
 
-        if self.wnd.is_key_pressed(keys.D):
+        if self.move_right:
             self.camera.rotate_right(frametime)
 
-        if self.wnd.is_key_pressed(keys.Q):
+        if self._zoom_in:
             self.camera.zoom_in()
 
-        if self.wnd.is_key_pressed(keys.E):
+        if self._zoom_out:
             self.camera.zoom_out()
 
         self.camera.update(frametime)
