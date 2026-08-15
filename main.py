@@ -27,8 +27,21 @@ class MilkyWaySimulation(mglw.WindowConfig):
 
         self.blackhole   = BlackHole()
         self.galaxy      = Galaxy()
+        self.stars = self.galaxy.generate_stars(1000)
+        self.star_data = np.array(
+            self.stars,
+            dtype="f4"
+        )
+        self.star_buffer = self.ctx.buffer(
+            self.star_data.tobytes()
+        )
         self.camera      = Camera()
         self.lod_manager = LODManager()
+
+        print(f"Generated {len(self.stars)} stars")
+
+        for i in range(5):
+            print(f"Star {i}: {self.stars[i]}")
 
         # Keyboard state flags
         self.move_up    = False
@@ -151,14 +164,46 @@ class MilkyWaySimulation(mglw.WindowConfig):
                 (self.main_quad_buffer, "2f", "in_position")
             ],
     )
-
+        # ==========================================================
+        # Star Shaders
+        # ==========================================================
+        
+        with open(
+            BASE_DIR / "shaders" / "star_vertex.glsl",
+            encoding="utf-8"
+        ) as f:
+            star_vertex_shader = f.read()
+        
+        with open(
+            BASE_DIR / "shaders" / "star_fragment.glsl",
+            encoding="utf-8"
+        ) as f:
+            star_fragment_shader = f.read()
+        
+        self.star_program = self.ctx.program(
+            vertex_shader=star_vertex_shader,
+            fragment_shader=star_fragment_shader,
+            )
+        self.star_vao = self.ctx.vertex_array(
+            self.star_program,
+            [
+                (
+                    self.star_buffer,
+                    "3f",
+                    "in_position"
+                )
+            ],
+        )
         self.renderer = Renderer(
                     self.ctx,
                     self.program,
                     self.main_quad_vao,
                     self.galaxy_program,
-                    self.galaxy_vao
+                    self.galaxy_vao,
+                    self.star_program,
+                    self.star_vao
                 )
+        
         # ==========================================================
         # Rendering Settings
         # ==========================================================
@@ -375,6 +420,10 @@ class MilkyWaySimulation(mglw.WindowConfig):
             self.program["u_camDistance"].value = self.camera.distance
 
         self.renderer.render(lod_level)
+        if lod_name == "FAR":
+            self.renderer.render_stars(
+                self.camera.distance
+            )
         # ----------------------------------------------------------
         # PASS 2
         # Post Processing
