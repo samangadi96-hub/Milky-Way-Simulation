@@ -50,6 +50,7 @@ class MilkyWaySimulation(mglw.WindowConfig):
         self.move_right = False
         self._zoom_in   = False
         self._zoom_out  = False
+        
 
         print()
         print('  Milky Way Simulation - Controls')
@@ -328,13 +329,7 @@ class MilkyWaySimulation(mglw.WindowConfig):
             self.camera.zoom_out()
 
         self.camera.update(frametime)
-        print(
-            f"Inclination = "
-            f"{math.degrees(self.camera.inclination):.2f}° | "
-            f"Target = "
-            f"{math.degrees(self.camera.target_inclination):.2f}°",
-            end="\r"
-        )
+       
 
         # ----------------------------------------------------------
         # LOD
@@ -382,10 +377,14 @@ class MilkyWaySimulation(mglw.WindowConfig):
         )
 
 
+        lod_name = self.lod_manager.get_level_name(lod_level)
+
         print(
             f"Distance = {self.camera.distance:.2f} | "
-            f"LOD = {lod_name:<6}",
-            end="\r"
+            f"LOD = {lod_name:<6} | "
+            f"Inclination = {math.degrees(self.camera.inclination):.2f}°",
+            end="\r",
+            flush=True
         )
         
         # ----------------------------------------------------------
