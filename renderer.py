@@ -68,14 +68,27 @@ class Renderer:
     # Render Stars
     # ======================================================
 
-    def render_stars(self, camera_distance):
+    def render_stars(
+            self,
+            camera_distance,
+            inclination,
+            azimuth
+        ):
 
-        self.star_program["u_cameraDistance"].value = (
-            camera_distance
-        )
+            self.star_program["u_cameraDistance"].value = (
+                camera_distance
+    )
 
-        self.ctx.point_size = 3.0
+            self.star_program["u_inclination"].value = (
+                inclination
+            )
 
-        self.star_vao.render(
-            mode=self.ctx.POINTS
-        )
+            self.star_program["u_azimuth"].value = (
+                azimuth
+            )
+
+            self.ctx.point_size = 3.0
+
+            self.star_vao.render(
+                mode=self.ctx.POINTS
+            )

@@ -328,6 +328,13 @@ class MilkyWaySimulation(mglw.WindowConfig):
             self.camera.zoom_out()
 
         self.camera.update(frametime)
+        print(
+            f"Inclination = "
+            f"{math.degrees(self.camera.inclination):.2f}° | "
+            f"Target = "
+            f"{math.degrees(self.camera.target_inclination):.2f}°",
+            end="\r"
+        )
 
         # ----------------------------------------------------------
         # LOD
@@ -422,7 +429,9 @@ class MilkyWaySimulation(mglw.WindowConfig):
         self.renderer.render(lod_level)
         if lod_name == "FAR":
             self.renderer.render_stars(
-                self.camera.distance
+                self.camera.distance,
+                self.camera.inclination,
+                self.camera.azimuth
             )
         # ----------------------------------------------------------
         # PASS 2

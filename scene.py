@@ -110,8 +110,52 @@ class Galaxy:
 
         for _ in range(count):
 
-            position = self.generate_spiral_star_position()
+            choice = random.random()
 
-            stars.append(position)
+            # ==================================================
+            # 1. CENTRAL BULGE
+            # ==================================================
+
+            if choice < 0.15:
+
+                radius = random.uniform(
+                    0.0,
+                    self.bulge_radius
+                )
+
+                angle = random.uniform(
+                    0.0,
+                    2.0 * math.pi
+                )
+
+                x = radius * math.cos(angle)
+                z = radius * math.sin(angle)
+
+                y = random.gauss(
+                    0.0,
+                    self.disk_thickness * 0.5
+                )
+
+            #==================================================
+            # 2. SPIRAL ARMS
+            # ==================================================
+
+            elif choice < 0.85:
+
+                x, y, z = (
+                    self.generate_spiral_star_position()
+                )
+
+            # ==================================================
+            # 3. GENERAL DISK
+            # ==================================================
+
+            else:
+
+                x, y, z = (
+                    self.generate_star_position()
+                )
+
+            stars.append((x, y, z))
 
         return stars
