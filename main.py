@@ -27,7 +27,7 @@ class MilkyWaySimulation(mglw.WindowConfig):
 
         self.blackhole   = BlackHole()
         self.galaxy      = Galaxy()
-        self.stars = self.galaxy.generate_stars(1000)
+        self.stars = self.galaxy.generate_stars(10000)
         self.star_data = np.array(
             self.stars,
             dtype="f4"
@@ -190,8 +190,10 @@ class MilkyWaySimulation(mglw.WindowConfig):
             [
                 (
                     self.star_buffer,
-                    "3f",
-                    "in_position"
+                    "3f 1f 1f",
+                    "in_position",
+                    "in_brightness",
+                    "in_temperature"
                 )
             ],
         )
