@@ -57,9 +57,10 @@ void main()
     // Spiral structure
     // --------------------------------------------------------
 
+    float safeRadius = max(radius, 0.0001);
     float spiralAngle =
         angle
-        + normalizedRadius * u_armTightness
+        - u_armTightness * log(safeRadius / max(u_bulgeRadius, 0.001))
         + u_azimuth;
 
     float spiral = 0.5 + 0.5 * cos(

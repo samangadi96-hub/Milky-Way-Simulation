@@ -7,6 +7,10 @@ uniform float u_innerDisk;
 uniform float u_outerDisk;
 uniform float u_azimuth;
 uniform float u_camDistance;
+uniform float u_lodDetail;
+uniform float u_volumetricDetail;
+uniform float u_diskThickness;
+uniform float u_proceduralStarWeight;
 
 in vec2 frag_pos;
 out vec4 fragColor;
@@ -88,8 +92,8 @@ void main()
     vec3 ray_dir = normalize(forward * fov_zoom + uv.x * right + uv.y * up);
 
     // 2. PHYSICS ENGINE & VOLUMETRIC VARIABLES
-    float dt = 0.1;        
-    int max_steps = 300; 
+    float dt = mix(0.2, 0.1, u_lodDetail);        
+    int max_steps = int(mix(50.0, 300.0, u_lodDetail)); 
     
     vec3 p = ray_origin; 
     vec3 v = ray_dir;
@@ -132,11 +136,15 @@ void main()
             vec3 sampling_pos = vec3(r * cos(angle), p.y, r * sin(angle));
 
             // Density calculation: Thicker in middle, falls off at edges
-            float vertical_falloff = exp(-(p.y * p.y) * 20.0);
+            float p_y_scaled = p.y / max(u_diskThickness, 0.05);
+            float vertical_falloff = exp(-(p_y_scaled * p_y_scaled) * 20.0);
             float radial_falloff = smoothstep(2.5, 4.0, r) * (1.0 - smoothstep(8.0, 12.0, r));
             
             // Apply 3D turbulent noise to the rotating volume
             float noise = fbm3D(sampling_pos * 1.5 - vec3(0.0, u_time * 0.2, 0.0));
+            // Fade out noise as volumetric detail goes down
+            noise = mix(1.0, noise, max(u_volumetricDetail, 0.01));
+            
             float density = vertical_falloff * radial_falloff * noise * 2.5;
 
             if (density > 0.05) {
@@ -178,12 +186,14 @@ void main()
         final_color = accumulated_gas_color; 
     } else {
         vec2 sky_uv = vec2(atan(v.z, v.x), asin(clamp(v.y, -1.0, 1.0)));
-        vec3 background_stars = get_stars(sky_uv * 10.0);
+        vec3 background_stars = get_stars(sky_uv * 10.0) * u_proceduralStarWeight;
         
-        // We multiply the background stars by the transmittance (opacity) of the gas, 
-        // then add the glowing gas on top. 
+        // We multiply the procedural background stars by the transmittance,
+        // and add the glowing gas.
         final_color = (background_stars * transmittance) + accumulated_gas_color;
     }
 
-    fragColor = vec4(final_color, 1.0);
+    // Output final color and the mask transmittance in the alpha channel
+    // for correct hardware compositing over the 3D star layer.
+    fragColor = vec4(final_color, transmittance);
 }

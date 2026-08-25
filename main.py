@@ -6,9 +6,11 @@ import numpy as np
 
 from blackhole import BlackHole
 from camera import Camera
+import glm
 from lod import LODManager
 from renderer import Renderer
-from scene import Galaxy
+from galaxy import GalacticBulge
+from galactic_disk import GalacticDisk
 
 class MilkyWaySimulation(mglw.WindowConfig):
 
@@ -26,22 +28,14 @@ class MilkyWaySimulation(mglw.WindowConfig):
         # ==========================================================
 
         self.blackhole   = BlackHole()
-        self.galaxy      = Galaxy()
-        self.stars = self.galaxy.generate_stars(10000)
-        self.star_data = np.array(
-            self.stars,
-            dtype="f4"
-        )
-        self.star_buffer = self.ctx.buffer(
-            self.star_data.tobytes()
-        )
         self.camera      = Camera()
         self.lod_manager = LODManager()
+        self.bulge       = GalacticBulge(self.ctx, Path(__file__).parent)
+        self.galactic_disk = GalacticDisk(self.ctx, Path(__file__).parent)
+        
+        self.galaxy_rotation_angle = 0.0
 
-        print(f"Generated {len(self.stars)} stars")
 
-        for i in range(5):
-            print(f"Star {i}: {self.stars[i]}")
 
         # Keyboard state flags
         self.move_up    = False
@@ -99,6 +93,38 @@ class MilkyWaySimulation(mglw.WindowConfig):
                 (self.main_quad_buffer, "2f", "in_position")
             ],
         )
+
+        # ==========================================================
+        # Medium Black Hole Shader
+        # ==========================================================
+        with open(BASE_DIR / "shaders" / "medium_blackhole_vert.glsl", encoding="utf-8") as f:
+            medium_vert = f.read()
+        with open(BASE_DIR / "shaders" / "medium_blackhole_frag.glsl", encoding="utf-8") as f:
+            medium_frag = f.read()
+        self.medium_program = self.ctx.program(
+            vertex_shader=medium_vert,
+            fragment_shader=medium_frag,
+        )
+        self.medium_vao = self.ctx.vertex_array(
+            self.medium_program,
+            [(self.main_quad_buffer, "2f", "in_position")]
+        )
+
+        # ==========================================================
+        # Billboard Shader
+        # ==========================================================
+        with open(BASE_DIR / "shaders" / "billboard_vert.glsl", encoding="utf-8") as f:
+            billboard_vert = f.read()
+        with open(BASE_DIR / "shaders" / "billboard_frag.glsl", encoding="utf-8") as f:
+            billboard_frag = f.read()
+        self.billboard_program = self.ctx.program(
+            vertex_shader=billboard_vert,
+            fragment_shader=billboard_frag,
+        )
+        self.billboard_vao = self.ctx.vertex_array(
+            self.billboard_program,
+            [(self.main_quad_buffer, "2f", "in_position")]
+        )
         
 
         # ==========================================================
@@ -138,73 +164,15 @@ class MilkyWaySimulation(mglw.WindowConfig):
             ],
         )
 
-        # ==========================================================
-        # Galaxy Shader
-        # ==========================================================
 
-        with open(
-            BASE_DIR / "shaders" / "galaxy_vertex.glsl",
-            encoding="utf-8"
-        ) as f:
-            galaxy_vertex_shader = f.read()
-
-        with open(
-            BASE_DIR / "shaders" / "galaxy_fragment.glsl",
-            encoding="utf-8"
-        ) as f:
-            galaxy_fragment_shader = f.read()
-
-        self.galaxy_program = self.ctx.program(
-    vertex_shader=galaxy_vertex_shader,
-    fragment_shader=galaxy_fragment_shader,
-)
-
-        self.galaxy_vao = self.ctx.vertex_array(
-            self.galaxy_program,
-            [
-                (self.main_quad_buffer, "2f", "in_position")
-            ],
-    )
-        # ==========================================================
-        # Star Shaders
-        # ==========================================================
-        
-        with open(
-            BASE_DIR / "shaders" / "star_vertex.glsl",
-            encoding="utf-8"
-        ) as f:
-            star_vertex_shader = f.read()
-        
-        with open(
-            BASE_DIR / "shaders" / "star_fragment.glsl",
-            encoding="utf-8"
-        ) as f:
-            star_fragment_shader = f.read()
-        
-        self.star_program = self.ctx.program(
-            vertex_shader=star_vertex_shader,
-            fragment_shader=star_fragment_shader,
-            )
-        self.star_vao = self.ctx.vertex_array(
-            self.star_program,
-            [
-                (
-                    self.star_buffer,
-                    "3f 1f 1f",
-                    "in_position",
-                    "in_brightness",
-                    "in_temperature"
-                )
-            ],
-        )
         self.renderer = Renderer(
                     self.ctx,
                     self.program,
                     self.main_quad_vao,
-                    self.galaxy_program,
-                    self.galaxy_vao,
-                    self.star_program,
-                    self.star_vao
+                    self.medium_program,
+                    self.medium_vao,
+                    self.billboard_program,
+                    self.billboard_vao
                 )
         
         # ==========================================================
@@ -225,9 +193,11 @@ class MilkyWaySimulation(mglw.WindowConfig):
     def create_framebuffer(self, width, height):
 
         self.scene_tex = self.ctx.texture((width, height), 4)
+        self.depth_tex = self.ctx.depth_renderbuffer((width, height))
 
         self.fbo = self.ctx.framebuffer(
-            color_attachments=[self.scene_tex]
+            color_attachments=[self.scene_tex],
+            depth_attachment=self.depth_tex
         )
 
     # ==============================================================
@@ -325,10 +295,10 @@ class MilkyWaySimulation(mglw.WindowConfig):
             self.camera.rotate_right(frametime)
 
         if self._zoom_in:
-            self.camera.zoom_in()
+            self.camera.zoom_in(frametime)
 
         if self._zoom_out:
-            self.camera.zoom_out()
+            self.camera.zoom_out(frametime)
 
         self.camera.update(frametime)
        
@@ -337,103 +307,157 @@ class MilkyWaySimulation(mglw.WindowConfig):
         # LOD
         # ----------------------------------------------------------
 
-        lod_level = self.lod_manager.get_level(
-        self.camera.distance
-    )
-
-        # ----------------------------------------------------------
-        # Galaxy shader uniforms
-        # ----------------------------------------------------------
-
-        if "u_inclination" in self.galaxy_program:
-            self.galaxy_program["u_inclination"].value = (
-                self.camera.inclination
-            )
-
-        if "u_azimuth" in self.galaxy_program:
-            self.galaxy_program["u_azimuth"].value = (
-                self.camera.azimuth
-            )
-
-        if "u_galaxyRadius" in self.galaxy_program:
-            self.galaxy_program["u_galaxyRadius"].value = (
-                self.galaxy.radius
-            )
-
-        if "u_bulgeRadius" in self.galaxy_program:
-            self.galaxy_program["u_bulgeRadius"].value = (
-                self.galaxy.bulge_radius
-            )
-
-        if "u_armTightness" in self.galaxy_program:
-            self.galaxy_program["u_armTightness"].value = (
-                self.galaxy.arm_tightness
-            )
-
-        if "u_numArms" in self.galaxy_program:
-            self.galaxy_program["u_numArms"].value = (
-                self.galaxy.num_arms
-            )
-        lod_name = self.lod_manager.get_level_name(
-            lod_level
+        lod_state = self.lod_manager.get_state(
+            self.camera.distance
         )
 
 
-        lod_name = self.lod_manager.get_level_name(lod_level)
-
+        fps = 1.0 / max(frametime, 0.0001)
+        
+        self.galaxy_rotation_angle += frametime * 0.05
+        
         print(
-            f"Distance = {self.camera.distance:.2f} | "
-            f"LOD = {lod_name:<6} | "
-            f"Inclination = {math.degrees(self.camera.inclination):.2f}°",
+            f"Stars: {self.bulge.num_stars + self.galactic_disk.num_stars} "
+            f"Bulge vis: {lod_state['bulge_visibility']:.2f} "
+            f"Galaxy Rot: {self.galaxy_rotation_angle:.2f} "
+            f"Dist: {self.camera.distance:.1f} "
+            f"FPS: {fps:.1f}      ",
             end="\r",
             flush=True
         )
         
         # ----------------------------------------------------------
-        # PASS 1 (Keep the rest of your render code exactly the same below here)
         # PASS 1
         # Render Scene
         # ----------------------------------------------------------
 
         self.fbo.use()
+        self.ctx.clear(0.0, 0.0, 0.0, 1.0, depth=1.0)
+        
+        # We need depth test for the stars, but disable depth mask so they don't occlude each other
+        self.ctx.enable(self.ctx.DEPTH_TEST)
+        self.ctx.depth_mask = False
+        
+        # Use standard additive blending for 3D stars
+        self.ctx.blend_func = (self.ctx.SRC_ALPHA, self.ctx.ONE)
 
-        self.ctx.clear(0.0, 0.0, 0.0, 1.0)
-
-        # Send all physical parameters as uniforms ONLY if the shader is actively using them
+        # NEAR Shader Uniforms
         if "u_time" in self.program:
             self.program["u_time"].value = time
-            
         if "aspectRatio" in self.program:
             self.program["aspectRatio"].value = bh.aspect_ratio
-            
         if "u_eventHorizon" in self.program:
             self.program["u_eventHorizon"].value = bh.event_horizon_radius
-            
         if "u_photonSphere" in self.program:
             self.program["u_photonSphere"].value = bh.photon_sphere_radius
-            
         if "u_innerDisk" in self.program:
             self.program["u_innerDisk"].value = bh.inner_disk_radius
-            
         if "u_outerDisk" in self.program:
             self.program["u_outerDisk"].value = bh.outer_disk_radius
-            
         if "u_diskSquish" in self.program:
             self.program["u_diskSquish"].value = self.camera.disk_squish
-
         if "u_azimuth" in self.program:
             self.program["u_azimuth"].value = self.camera.azimuth
-
         if "u_camDistance" in self.program:
             self.program["u_camDistance"].value = self.camera.distance
+            
+        # Continuous LOD Parameters for NEAR
+        if "u_lodDetail" in self.program:
+            self.program["u_lodDetail"].value = lod_state["ray_march_detail"]
+        if "u_volumetricDetail" in self.program:
+            self.program["u_volumetricDetail"].value = lod_state["volumetric_detail"]
+        if "u_diskThickness" in self.program:
+            self.program["u_diskThickness"].value = lod_state["disk_thickness"]
+        if "u_proceduralStarWeight" in self.program:
+            self.program["u_proceduralStarWeight"].value = lod_state["near_weight"]
 
-        self.renderer.render(lod_level)
-        if lod_name == "FAR":
-            self.renderer.render_stars(
-                self.camera.distance,
-                self.camera.inclination,
-                self.camera.azimuth
-            )
+        # Medium LOD Uniforms
+        if "u_camDistance" in self.medium_program:
+            self.medium_program["u_camDistance"].value = self.camera.distance
+        if "aspectRatio" in self.medium_program:
+            self.medium_program["aspectRatio"].value = bh.aspect_ratio
+        if "u_diskSquish" in self.medium_program:
+            self.medium_program["u_diskSquish"].value = self.camera.disk_squish
+        if "u_time" in self.medium_program:
+            self.medium_program["u_time"].value = time
+        if "u_azimuth" in self.medium_program:
+            self.medium_program["u_azimuth"].value = self.camera.azimuth
+        if "u_diskThickness" in self.medium_program:
+            self.medium_program["u_diskThickness"].value = lod_state["disk_thickness"]
+        if "u_glowIntensity" in self.medium_program:
+            self.medium_program["u_glowIntensity"].value = lod_state["glow_intensity"]
+        if "u_innerDisk" in self.medium_program:
+            self.medium_program["u_innerDisk"].value = bh.inner_disk_radius
+        if "u_outerDisk" in self.medium_program:
+            self.medium_program["u_outerDisk"].value = bh.outer_disk_radius
+        if "u_innerRingStrength" in self.medium_program:
+            self.medium_program["u_innerRingStrength"].value = lod_state["inner_ring_strength"]
+        if "u_dopplerStrength" in self.medium_program:
+            self.medium_program["u_dopplerStrength"].value = lod_state["doppler_strength"]
+        if "u_diskOuterRadius" in self.medium_program:
+            self.medium_program["u_diskOuterRadius"].value = lod_state["disk_outer_radius"]
+        if "u_volumetricDetail" in self.medium_program:
+            self.medium_program["u_volumetricDetail"].value = lod_state["volumetric_detail"]
+        if "u_proceduralStarWeight" in self.medium_program:
+            self.medium_program["u_proceduralStarWeight"].value = lod_state["near_weight"]
+
+        # Billboard LOD Uniforms
+        if "u_camDistance" in self.billboard_program:
+            self.billboard_program["u_camDistance"].value = self.camera.distance
+        if "u_time" in self.billboard_program:
+            self.billboard_program["u_time"].value = time
+        if "aspectRatio" in self.billboard_program:
+            self.billboard_program["aspectRatio"].value = bh.aspect_ratio
+        if "u_diskSquish" in self.billboard_program:
+            self.billboard_program["u_diskSquish"].value = self.camera.disk_squish
+        if "u_azimuth" in self.billboard_program:
+            self.billboard_program["u_azimuth"].value = self.camera.azimuth
+        if "u_diskThickness" in self.billboard_program:
+            self.billboard_program["u_diskThickness"].value = lod_state["disk_thickness"]
+        if "u_glowIntensity" in self.billboard_program:
+            self.billboard_program["u_glowIntensity"].value = lod_state["glow_intensity"]
+        if "u_innerDisk" in self.billboard_program:
+            self.billboard_program["u_innerDisk"].value = bh.inner_disk_radius
+        if "u_outerDisk" in self.billboard_program:
+            self.billboard_program["u_outerDisk"].value = bh.outer_disk_radius
+        if "u_innerRingStrength" in self.billboard_program:
+            self.billboard_program["u_innerRingStrength"].value = lod_state["inner_ring_strength"]
+        if "u_dopplerStrength" in self.billboard_program:
+            self.billboard_program["u_dopplerStrength"].value = lod_state["doppler_strength"]
+        if "u_diskOuterRadius" in self.billboard_program:
+            self.billboard_program["u_diskOuterRadius"].value = lod_state["disk_outer_radius"]
+        if "u_volumetricDetail" in self.billboard_program:
+            self.billboard_program["u_volumetricDetail"].value = lod_state["volumetric_detail"]
+        if "u_proceduralStarWeight" in self.billboard_program:
+            self.billboard_program["u_proceduralStarWeight"].value = lod_state["near_weight"]
+
+        # Render Galactic Disk first, then Bulge
+        # Fade out 3D stars when very close to avoid stacking over procedural stars
+        star_visibility = 1.0 - lod_state["near_weight"]
+        
+        self.galactic_disk.render(
+            self.camera, 
+            bh.aspect_ratio, 
+            star_visibility, 
+            self.galaxy_rotation_angle
+        )
+        self.bulge.render(
+            self.camera, 
+            bh.aspect_ratio, 
+            star_visibility, 
+            self.galaxy_rotation_angle
+        )
+
+        # ----------------------------------------------------------
+        # Post-process passes (Black hole raymarcher)
+        # ----------------------------------------------------------
+        self.ctx.disable(self.ctx.DEPTH_TEST)
+        self.ctx.depth_mask = True # restore depth mask
+        
+        # Composite mode: StarColor * Transmittance + GasColor * 1.0
+        self.ctx.blend_func = (self.ctx.ONE, self.ctx.SRC_ALPHA)
+        
+        self.renderer.render(lod_state)
         # ----------------------------------------------------------
         # PASS 2
         # Post Processing
@@ -442,6 +466,7 @@ class MilkyWaySimulation(mglw.WindowConfig):
         self.ctx.screen.use()
 
         self.ctx.clear(0.02, 0.02, 0.03, 1.0)
+        self.ctx.disable(self.ctx.DEPTH_TEST)
 
         self.scene_tex.use(location=0)
 

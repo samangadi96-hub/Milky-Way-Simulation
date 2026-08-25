@@ -37,10 +37,10 @@ class Galaxy:
 
         # Pitch-angle related winding.
         # Smaller values = more open arms.
-        self.arm_tightness = 3.0
+        self.arm_tightness = 2.5
 
         # Width of the spiral-arm density enhancement
-        self.arm_width = 0.16
+        self.arm_width = 0.35
 
         # How strongly stars concentrate toward spiral arms
         self.arm_strength = 1.8
@@ -226,12 +226,11 @@ class Galaxy:
                 2.0 * math.pi * arm / self.num_arms
             )
 
-            # Spiral curve
+            # Spiral curve (Logarithmic)
             expected_angle = (
                 arm_angle +
-                radius * self.arm_tightness +
-                0.35 * radius * radius
-        )
+                self.arm_tightness * math.log(radius / self.bulge_radius)
+            )
 
             # Difference between the star and the arm
             difference = (

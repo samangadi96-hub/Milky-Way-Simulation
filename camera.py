@@ -1,4 +1,5 @@
 import math
+import glm
 
 
 class Camera:
@@ -27,7 +28,7 @@ class Camera:
     # Zoom
     ZOOM_STEP   = 0.08
     ZOOM_MIN    = 0.25
-    ZOOM_MAX    = 8.0
+    ZOOM_MAX    = 10000.0
     ZOOM_SMOOTH = 8.0
 
     # Keyboard orbit step (radians per call)
@@ -118,8 +119,8 @@ class Camera:
         self._last_mouse_y = y
 
     def on_mouse_scroll(self, x: int, y: int, x_offset: float, y_offset: float):
-        """Scroll wheel zooms smoothly in/out."""
-        self.target_distance -= y_offset * self.ZOOM_STEP
+        """Scroll wheel zooms smoothly in/out using logarithmic scale."""
+        self.target_distance *= math.exp(-y_offset * 0.2)
         self.target_distance  = max(self.ZOOM_MIN,
                                     min(self.ZOOM_MAX, self.target_distance))
 
@@ -143,13 +144,13 @@ class Camera:
     def rotate_right(self, dt: float):
         self.target_azimuth += self.KB_AZIMUTH_SPEED * dt
 
-    def zoom_in(self):
+    def zoom_in(self, dt: float = 1/60.0):
         self.target_distance = max(self.ZOOM_MIN,
-                                   self.target_distance - self.ZOOM_STEP)
+                                   self.target_distance * math.exp(-2.0 * dt))
 
-    def zoom_out(self):
+    def zoom_out(self, dt: float = 1/60.0):
         self.target_distance = min(self.ZOOM_MAX,
-                                   self.target_distance + self.ZOOM_STEP)
+                                   self.target_distance * math.exp(2.0 * dt))
 
     # ==========================================================================
     # Per-frame update
@@ -205,4 +206,33 @@ class Camera:
     # ==========================================================================
 
     def _clamp_incl(self, v: float) -> float:
-        return max(self.INCL_MIN, min(self.INCL_MAX, v))
+        # Don't clamp completely to 0.0 to avoid gimbal lock with lookAt
+        return max(0.001, min(self.INCL_MAX, v))
+
+    # ==========================================================================
+    # Matrix Generation
+    # ==========================================================================
+
+    def get_view_matrix(self) -> glm.mat4:
+        # Convert inclination/azimuth to 3D Cartesian coordinates
+        y = self.distance * math.cos(self.inclination)
+        r = self.distance * math.sin(self.inclination)
+        x = r * math.sin(self.azimuth)
+        z = r * math.cos(self.azimuth)
+
+        pos = glm.vec3(x, y, z)
+        target = glm.vec3(0.0, 0.0, 0.0)
+        
+        # Up vector
+        up = glm.vec3(0.0, 1.0, 0.0)
+        # If camera is looking straight down, change up vector
+        if abs(math.cos(self.inclination)) > 0.999:
+            up = glm.vec3(0.0, 0.0, -1.0)
+
+        return glm.lookAt(pos, target, up)
+
+    def get_projection_matrix(self, aspect_ratio: float) -> glm.mat4:
+        fov = math.radians(45.0)
+        near = 0.01
+        far = 10000.0
+        return glm.perspective(fov, aspect_ratio, near, far)

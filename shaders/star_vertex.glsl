@@ -7,79 +7,35 @@ in float in_temperature;
 out float starBrightness;
 out float starTemperature;
 
-uniform float u_cameraDistance;
-uniform float u_inclination;
-uniform float u_azimuth;
+uniform mat4 u_model;
+uniform mat4 u_view;
+uniform mat4 u_projection;
 
 void main()
 {
-    vec3 position = in_position;
-
     // ======================================================
-    // 1. Rotate around the galaxy
+    // 1. Pass stellar properties
     // ======================================================
-
-    float cosA = cos(u_azimuth);
-    float sinA = sin(u_azimuth);
-
-    float rotatedX =
-        position.x * cosA -
-        position.z * sinA;
-
-    float rotatedZ =
-        position.x * sinA +
-        position.z * cosA;
-
-    position.x = rotatedX;
-    position.z = rotatedZ;
-
-    // ======================================================
-    // 2. Tilt the galaxy
-    // ======================================================
-
-    float cosI = cos(u_inclination);
-    float sinI = sin(u_inclination);
-
-    float rotatedY =
-        position.y * cosI -
-        position.z * sinI;
-
-    float finalZ =
-        position.y * sinI +
-        position.z * cosI;
-
-    position.y = rotatedY;
-    position.z = finalZ;
-
-    // ======================================================
-    // 3. Camera distance / zoom
-    // ======================================================
-
-    float scale =
-        6.0 / max(u_cameraDistance, 1.0);
-
-    position *= scale;
-
-    // ======================================================
-    // 4. Pass stellar properties
-    // ======================================================
-
     starBrightness = in_brightness;
     starTemperature = in_temperature;
 
     // ======================================================
-    // 5. Projection
+    // 2. Transform position
     // ======================================================
+    vec4 world_pos = u_model * vec4(in_position, 1.0);
+    vec4 view_pos = u_view * world_pos;
+    gl_Position = u_projection * view_pos;
 
-    gl_Position = vec4(
-        position.x,
-        position.z,
-        0.0,
-        1.0
-    );
-
-    // Slightly vary apparent star size
-    gl_PointSize =
-        1.5 +
-        in_brightness * 3.0;
+    // ======================================================
+    // 3. Point Size
+    // ======================================================
+    // view_pos.z is negative in standard OpenGL right-handed coordinates.
+    float dist = max(0.1, -view_pos.z);
+    
+    // Base size depends on brightness
+    float baseSize = 1.5 + in_brightness * 3.0;
+    
+    // Scale by distance (closer = bigger, farther = smaller)
+    // Avoid making points huge when close
+    gl_PointSize = clamp(baseSize * (10.0 / dist), 1.0, 15.0);
 }
