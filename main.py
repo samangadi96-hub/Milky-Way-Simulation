@@ -433,7 +433,7 @@ class MilkyWaySimulation(mglw.WindowConfig):
 
         # Render Galactic Disk first, then Bulge
         # Fade out 3D stars when very close to avoid stacking over procedural stars
-        star_visibility = 1.0 - lod_state["near_weight"]
+        star_visibility = 1.0 
         
         self.galactic_disk.render(
             self.camera, 

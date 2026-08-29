@@ -11,6 +11,7 @@ uniform float u_lodDetail;
 uniform float u_volumetricDetail;
 uniform float u_diskThickness;
 uniform float u_proceduralStarWeight;
+uniform float u_lodWeight;
 
 in vec2 frag_pos;
 out vec4 fragColor;
@@ -135,34 +136,185 @@ void main()
             // Rotate the sampling coordinates to simulate fluid motion
             vec3 sampling_pos = vec3(r * cos(angle), p.y, r * sin(angle));
 
-            // Density calculation: Thicker in middle, falls off at edges
-            float p_y_scaled = p.y / max(u_diskThickness, 0.05);
-            float vertical_falloff = exp(-(p_y_scaled * p_y_scaled) * 20.0);
-            float radial_falloff = smoothstep(2.5, 4.0, r) * (1.0 - smoothstep(8.0, 12.0, r));
+            // --------------------------------------------------
+            // Thin galactic/accretion plane
+            // --------------------------------------------------
+
+            float disk_scale = max(
+                u_diskThickness,
+                0.08
+            );
+
+            float p_y_scaled =
+                p.y / disk_scale;
+
+            float vertical_falloff =
+                exp(
+                    -p_y_scaled *
+                    p_y_scaled *
+                    8.0
+                );
+            // --------------------------------------------------
+            // Radial accretion-disk profile
+            // --------------------------------------------------
+
+            // Sharp inner edge, broad but soft outer falloff.
+            float inner_edge = smoothstep(
+                2.3,
+                3.0,
+                r
+            );
+
+            float outer_edge = 1.0 - smoothstep(
+                7.0,
+                10.5,
+                r
+            );
+
+            // Concentrate the brightest material toward the centre.
+            float radial_peak = exp(
+                -pow((r - 3.8) / 2.4, 2.0)
+            );
+
+            float radial_falloff =
+                inner_edge *
+                outer_edge *
+                (0.35 + 0.65 * radial_peak);
             
             // Apply 3D turbulent noise to the rotating volume
             float noise = fbm3D(sampling_pos * 1.5 - vec3(0.0, u_time * 0.2, 0.0));
             // Fade out noise as volumetric detail goes down
             noise = mix(1.0, noise, max(u_volumetricDetail, 0.01));
             
-            float density = vertical_falloff * radial_falloff * noise * 2.5;
+            // Keep the gas dense enough to glow,
+            // but prevent the disk from becoming a solid wall.
+            float density =
+                vertical_falloff *
+                radial_falloff *
+                noise *
+                0.85;
+
+            // Make the inner disk denser than the outer disk.
+            float inner_density_boost =
+                smoothstep(7.0, 2.5, r);
+
+            density *= mix(
+                0.65,
+                1.25,
+                inner_density_boost
+            );
 
             if (density > 0.05) {
-                // Color Gradient based on distance (Hotter near the black hole)
-                float temp = clamp(1.0 - (r - 2.5) / 7.0, 0.0, 1.0);
-                vec3 local_color = mix(dark_red, bright_orange, temp);
-                local_color = mix(local_color, hot_white, pow(temp, 3.0));
+                // ======================================================
+                // COLOR / TEMPERATURE
+                // ======================================================
 
-                // Relativistic Doppler Beaming (Approximation)
-                // Gas moving towards the camera is on the left (-x side generally)
-                float doppler = 1.0 + 0.8 * (p.x / r) * min(1.0, 5.0/r); 
-                local_color *= pow(doppler, 3.0); // Doppler boosts brightness exponentially
+                float temp = clamp(
+                    1.0 - (r - 2.5) / 7.0,
+                    0.0,
+                    1.0
+                );
 
-                // Accumulate the glowing gas
-                accumulated_gas_color += local_color * density * dt * transmittance * 5.0;
-                
-                // The gas absorbs light behind it (makes the disk opaque)
-                transmittance *= exp(-density * dt * 2.0);
+                vec3 local_color = mix(
+                    dark_red,
+                    bright_orange,
+                    temp
+                );
+
+                local_color = mix(
+                    local_color,
+                    hot_white,
+                    pow(temp, 3.0)
+                );
+
+
+                // ======================================================
+                // INNER DISK HEATING
+                // ======================================================
+
+                float inner_heat = smoothstep(
+                    6.0,
+                    2.5,
+                    r
+                );
+
+                local_color *= mix(
+                    0.65,
+                    1.45,
+                    inner_heat
+                );
+
+
+                // ======================================================
+                // DOPPLER BEAMING
+                // ======================================================
+
+                float doppler =
+                    1.0 +
+                    0.8 *
+                    (p.x / r) *
+                    min(1.0, 5.0 / r);
+
+                local_color *= pow(
+                    doppler,
+                    3.0
+                );
+
+                // ======================================================
+                // DISK EMISSION
+                // ======================================================
+
+                // Emission should be bright, but spatially localized.
+                const float EMISSION_STRENGTH = 1.35;
+
+                float emission =
+                    density *
+                    EMISSION_STRENGTH;
+
+                // Outer material is cooler and fainter.
+                float outer_emission_fade =
+                    1.0 - smoothstep(5.0, 10.0, r);
+
+                emission *= mix(
+                    0.35,
+                    1.0,
+                    outer_emission_fade
+                );
+
+                accumulated_gas_color +=
+                    local_color *
+                    emission *
+                    dt *
+                    transmittance;
+
+
+                // ======================================================
+                // DISK ABSORPTION / OPACITY
+                // ======================================================
+
+                // The disk absorbs much more gently than the old version.
+                // This keeps background stars visible through low-density gas.
+                // ======================================================
+                // DISK TRANSMISSION
+                // ======================================================
+
+                // Emission and absorption are separate.
+                // Dense gas blocks more background light.
+                const float ABSORPTION_STRENGTH = 0.55;
+
+                float optical_depth =
+                    density *
+                    dt *
+                    ABSORPTION_STRENGTH;
+
+                transmittance *= exp(-optical_depth);
+
+                // Keep numerical stability.
+                transmittance = clamp(
+                    transmittance,
+                    0.0,
+                    1.0
+                );
             }
         }
 
@@ -178,22 +330,57 @@ void main()
         if (transmittance < 0.01) break; 
     }
 
-    // 4. FINAL COMPOSITING
+    // ==========================================
+    // FINAL COMPOSITING
+    // ==========================================
+
     vec3 final_color = vec3(0.0);
 
-    if (hit_black_hole) {
-        // Event horizon is pure black, but we add the gas we saw on the way in
-        final_color = accumulated_gas_color; 
-    } else {
-        vec2 sky_uv = vec2(atan(v.z, v.x), asin(clamp(v.y, -1.0, 1.0)));
-        vec3 background_stars = get_stars(sky_uv * 10.0) * u_proceduralStarWeight;
-        
-        // We multiply the procedural background stars by the transmittance,
-        // and add the glowing gas.
-        final_color = (background_stars * transmittance) + accumulated_gas_color;
+    // --------------------------------------------------
+    // Event horizon
+    // --------------------------------------------------
+
+    if (hit_black_hole)
+    {
+        // The event horizon is completely opaque.
+        final_color = accumulated_gas_color;
+        transmittance = 0.0;
+    }
+    else
+    {
+        // Background procedural stars.
+        vec2 sky_uv = vec2(
+            atan(v.z, v.x),
+            asin(clamp(v.y, -1.0, 1.0))
+        );
+
+        vec3 background_stars =
+            get_stars(sky_uv * 10.0) *
+            u_proceduralStarWeight;
+
+        final_color =
+            accumulated_gas_color +
+            background_stars * transmittance;
     }
 
-    // Output final color and the mask transmittance in the alpha channel
-    // for correct hardware compositing over the 3D star layer.
-    fragColor = vec4(final_color, transmittance);
-}
+
+    // ==========================================
+    // LOD OUTPUT
+    // ==========================================
+
+    // Keep physical transmission separate from LOD fading.
+
+    float final_alpha = mix(
+        1.0,
+        transmittance,
+        u_lodWeight
+    );
+
+    vec3 final_rgb =
+        final_color * u_lodWeight;
+
+    fragColor = vec4(
+        final_rgb,
+        final_alpha
+    );
+    }

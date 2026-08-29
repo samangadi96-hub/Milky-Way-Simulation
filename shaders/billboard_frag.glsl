@@ -98,7 +98,13 @@ void main() {
             final_alpha += gas_mask * 0.7;
             
             // 4. Outer Disk with strong Doppler (approx 5.5 to u_outerDisk)
-            float outer_mask = smoothstep(5.5, 6.5, disk_r) * (1.0 - smoothstep(outer_r - 4.0, outer_r, disk_r));
+            float outer_mask =
+                smoothstep(5.5, 6.5, disk_r) *
+                (1.0 - smoothstep(
+                    outer_r - 5.0,
+                    outer_r,
+                    disk_r
+                ));
             vec3 hot_white = vec3(1.0, 0.95, 0.8);
             vec3 dark_red = vec3(0.3, 0.02, 0.0);
             float temp_outer = clamp(1.0 - (disk_r - 5.5) / (outer_r - 5.5), 0.0, 1.0);
