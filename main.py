@@ -44,16 +44,20 @@ class MilkyWaySimulation(mglw.WindowConfig):
         self.move_right = False
         self._zoom_in   = False
         self._zoom_out  = False
+        self.debug_dust = False
         
 
         print()
         print('  Milky Way Simulation - Controls')
         print('  --------------------------------')
-        print('  Mouse Left-drag  -> orbit galaxy')
+        print('  Left Drag        -> orbit galaxy')
+        print('  Middle Drag      -> pan camera')
         print('  Mouse Scroll     -> zoom in / out')
         print('  W/S / Up/Down    -> tilt camera')
         print('  A/D / Left/Right -> rotate camera')
         print('  Q / E            -> zoom in / out')
+        print('  R                -> reset camera')
+        print('  T                -> toggle dust debug')
         print('  --------------------------------')
         print()
 
@@ -164,6 +168,32 @@ class MilkyWaySimulation(mglw.WindowConfig):
             ],
         )
 
+        # ==========================================================
+        # Dust Volume Shader (quarter-res)
+        # ==========================================================
+        with open(BASE_DIR / "shaders" / "dust_vol_vert.glsl", encoding="utf-8") as f:
+            vol_vert = f.read()
+        with open(BASE_DIR / "shaders" / "dust_vol_frag.glsl", encoding="utf-8") as f:
+            vol_frag = f.read()
+        self.dust_program = self.ctx.program(
+            vertex_shader=vol_vert, fragment_shader=vol_frag,
+        )
+        self.dust_vao = self.ctx.vertex_array(
+            self.dust_program, [(self.main_quad_buffer, "2f", "in_position")]
+        )
+
+        # Composite shader
+        with open(BASE_DIR / "shaders" / "dust_comp_vert.glsl", encoding="utf-8") as f:
+            comp_vert = f.read()
+        with open(BASE_DIR / "shaders" / "dust_comp_frag.glsl", encoding="utf-8") as f:
+            comp_frag = f.read()
+        self.comp_program = self.ctx.program(
+            vertex_shader=comp_vert, fragment_shader=comp_frag,
+        )
+        self.comp_vao = self.ctx.vertex_array(
+            self.comp_program, [(self.quad_buffer, "2f 2f", "in_vert", "in_texcoord")]
+        )
+
 
         self.renderer = Renderer(
                     self.ctx,
@@ -200,6 +230,16 @@ class MilkyWaySimulation(mglw.WindowConfig):
             depth_attachment=self.depth_tex
         )
 
+        # Quarter-resolution FBO for dust pass
+        qw, qh = max(width // 4, 1), max(height // 4, 1)
+        self.dust_tex = self.ctx.texture((qw, qh), 4, dtype='f2')
+        self.dust_tex.filter = (self.ctx.LINEAR, self.ctx.LINEAR)
+        self.dust_fbo = self.ctx.framebuffer(color_attachments=[self.dust_tex])
+
+        # Intermediate composited scene FBO (full res)
+        self.comp_tex = self.ctx.texture((width, height), 4)
+        self.comp_fbo = self.ctx.framebuffer(color_attachments=[self.comp_tex])
+
     # ==============================================================
     # Window Resize
     # ==============================================================
@@ -208,6 +248,10 @@ class MilkyWaySimulation(mglw.WindowConfig):
 
         self.scene_tex.release()
         self.fbo.release()
+        self.dust_tex.release()
+        self.dust_fbo.release()
+        self.comp_tex.release()
+        self.comp_fbo.release()
 
         self.create_framebuffer(width, height)
 
@@ -224,7 +268,7 @@ class MilkyWaySimulation(mglw.WindowConfig):
         self.camera.on_mouse_release(x, y, button)
 
     def on_mouse_drag_event(self, x: int, y: int, dx: int, dy: int):
-        self.camera.on_mouse_drag(x, y, dx, dy, buttons=1)
+        self.camera.on_mouse_drag(x, y, dx, dy)
 
     def on_mouse_scroll_event(self, x_offset: float, y_offset: float):
         self.camera.on_mouse_scroll(0, 0, x_offset, y_offset)
@@ -254,6 +298,12 @@ class MilkyWaySimulation(mglw.WindowConfig):
 
             elif key == self.wnd.keys.E:
                 self._zoom_out = True
+
+            elif key == self.wnd.keys.R:
+                self.camera.reset()
+
+            elif key == self.wnd.keys.T:
+                self.debug_dust = not self.debug_dust
 
         elif action == self.wnd.keys.ACTION_RELEASE:
 
@@ -308,7 +358,7 @@ class MilkyWaySimulation(mglw.WindowConfig):
         # ----------------------------------------------------------
 
         lod_state = self.lod_manager.get_state(
-            self.camera.distance
+            self.camera.absolute_distance
         )
 
 
@@ -320,7 +370,7 @@ class MilkyWaySimulation(mglw.WindowConfig):
             f"Stars: {self.bulge.num_stars + self.galactic_disk.num_stars} "
             f"Bulge vis: {lod_state['bulge_visibility']:.2f} "
             f"Galaxy Rot: {self.galaxy_rotation_angle:.2f} "
-            f"Dist: {self.camera.distance:.1f} "
+            f"Dist: {self.camera.absolute_distance:.1f} "
             f"FPS: {fps:.1f}      ",
             end="\r",
             flush=True
@@ -341,6 +391,14 @@ class MilkyWaySimulation(mglw.WindowConfig):
         # Use standard additive blending for 3D stars
         self.ctx.blend_func = (self.ctx.SRC_ALPHA, self.ctx.ONE)
 
+        # Calculate black hole screen position (0,0,0) in NDC
+        vp_matrix = self.camera.get_projection_matrix(bh.aspect_ratio) * self.camera.get_view_matrix()
+        bh_clip = vp_matrix * glm.vec4(0.0, 0.0, 0.0, 1.0)
+        if bh_clip.w > 0.0:
+            bh_screen_pos = (bh_clip.x / bh_clip.w, bh_clip.y / bh_clip.w)
+        else:
+            bh_screen_pos = (100.0, 100.0)
+
         # NEAR Shader Uniforms
         if "u_time" in self.program:
             self.program["u_time"].value = time
@@ -359,7 +417,7 @@ class MilkyWaySimulation(mglw.WindowConfig):
         if "u_azimuth" in self.program:
             self.program["u_azimuth"].value = self.camera.azimuth
         if "u_camDistance" in self.program:
-            self.program["u_camDistance"].value = self.camera.distance
+            self.program["u_camDistance"].value = self.camera.absolute_distance
             
         # Continuous LOD Parameters for NEAR
         if "u_lodDetail" in self.program:
@@ -370,10 +428,12 @@ class MilkyWaySimulation(mglw.WindowConfig):
             self.program["u_diskThickness"].value = lod_state["disk_thickness"]
         if "u_proceduralStarWeight" in self.program:
             self.program["u_proceduralStarWeight"].value = lod_state["near_weight"]
+        if "u_bhScreenPos" in self.program:
+            self.program["u_bhScreenPos"].value = bh_screen_pos
 
         # Medium LOD Uniforms
         if "u_camDistance" in self.medium_program:
-            self.medium_program["u_camDistance"].value = self.camera.distance
+            self.medium_program["u_camDistance"].value = self.camera.absolute_distance
         if "aspectRatio" in self.medium_program:
             self.medium_program["aspectRatio"].value = bh.aspect_ratio
         if "u_diskSquish" in self.medium_program:
@@ -400,10 +460,12 @@ class MilkyWaySimulation(mglw.WindowConfig):
             self.medium_program["u_volumetricDetail"].value = lod_state["volumetric_detail"]
         if "u_proceduralStarWeight" in self.medium_program:
             self.medium_program["u_proceduralStarWeight"].value = lod_state["near_weight"]
+        if "u_bhScreenPos" in self.medium_program:
+            self.medium_program["u_bhScreenPos"].value = bh_screen_pos
 
         # Billboard LOD Uniforms
         if "u_camDistance" in self.billboard_program:
-            self.billboard_program["u_camDistance"].value = self.camera.distance
+            self.billboard_program["u_camDistance"].value = self.camera.absolute_distance
         if "u_time" in self.billboard_program:
             self.billboard_program["u_time"].value = time
         if "aspectRatio" in self.billboard_program:
@@ -430,36 +492,39 @@ class MilkyWaySimulation(mglw.WindowConfig):
             self.billboard_program["u_volumetricDetail"].value = lod_state["volumetric_detail"]
         if "u_proceduralStarWeight" in self.billboard_program:
             self.billboard_program["u_proceduralStarWeight"].value = lod_state["near_weight"]
+        if "u_bhScreenPos" in self.billboard_program:
+            self.billboard_program["u_bhScreenPos"].value = bh_screen_pos
 
         # Render Galactic Disk first, then Bulge
         # Fade out 3D stars when very close to avoid stacking over procedural stars
+        star_visibility = 1.0 
         base_visibility = 1.0 - lod_state["near_weight"]
         star_visibility = base_visibility
         
-        # LOCAL 3-9 FIX ONLY: Restore 3D moving stars in the near region
-        # Ensures they don't abruptly appear or disappear by blending from 2.0 to 9.0
-        dist = self.camera.distance
-        if 2.0 <= dist <= 9.0:
+        # LOCAL FIX: Restore 3D moving stars in the near region
+        # Ensures they don't abruptly appear or disappear by blending from 2.0 to 11.0
+        dist = self.camera.absolute_distance
+        if dist < 11.0:
             def smoothstep_py(e0, e1, x):
                 t = max(0.0, min(1.0, (x - e0) / (e1 - e0)))
                 return t * t * (3.0 - 2.0 * t)
                 
-            # Get the exact base visibility that will be active at distance 9.0
+            # Get the exact base visibility that will be active at distance 11.0
             # to ensure a mathematically perfect, seamless merge.
-            base_at_9 = 1.0 - self.lod_manager.get_state(9.0)["near_weight"]
+            base_at_11 = 1.0 - self.lod_manager.get_state(11.0)["near_weight"]
             
             if dist < 4.0:
                 # Ramp up: 0.0 at dist 2.0 -> ~0.125 at dist 3.0 -> 0.25 at dist 4.0
                 t = smoothstep_py(2.0, 4.0, dist)
                 local_vis = t * 0.25
-            elif dist < 7.0:
-                # Moderate to Strong: 0.25 at dist 4.0 -> ~0.30 at dist 5.0 -> 0.45 at dist 7.0
-                t = smoothstep_py(4.0, 7.0, dist)
-                local_vis = 0.25 * (1.0 - t) + 0.45 * t
+            elif dist < 8.0:
+                # Moderate to Strong: 0.25 at dist 4.0 -> ~0.40 at dist 6.0 -> 0.55 at dist 8.0
+                t = smoothstep_py(4.0, 8.0, dist)
+                local_vis = 0.25 * (1.0 - t) + 0.55 * t
             else:
-                # Merge down to normal transition: 0.45 at dist 7.0 -> base_at_9 at dist 9.0
-                t = smoothstep_py(7.0, 9.0, dist)
-                local_vis = 0.45 * (1.0 - t) + base_at_9 * t
+                # Merge up to normal transition: 0.55 at dist 8.0 -> base_at_11 at dist 11.0
+                t = smoothstep_py(8.0, 11.0, dist)
+                local_vis = 0.55 * (1.0 - t) + base_at_11 * t
                 
             star_visibility = local_vis
         
@@ -486,6 +551,57 @@ class MilkyWaySimulation(mglw.WindowConfig):
         self.ctx.blend_func = (self.ctx.ONE, self.ctx.SRC_ALPHA)
         
         self.renderer.render(lod_state)
+
+        # ----------------------------------------------------------
+        # PASS 1.5: Galaxy Dust (quarter-res)
+        # ----------------------------------------------------------
+        dust_weight = 0.0
+        if dist > 8.0:
+            t = max(0.0, min(1.0, (dist - 8.0) / (25.0 - 8.0)))
+            dust_weight = t * t * (3.0 - 2.0 * t)
+        
+        self.dust_fbo.use()
+        self.ctx.clear(1.0, 1.0, 1.0, 1.0) # Clear to 1.0 transmission
+        self.ctx.disable(self.ctx.BLEND)
+        self.ctx.disable(self.ctx.DEPTH_TEST)
+        
+        if dust_weight > 0.001:
+            vp = self.camera.get_projection_matrix(bh.aspect_ratio) * self.camera.get_view_matrix()
+            if "u_camPos" in self.dust_program:
+                self.dust_program["u_camPos"].value = self.camera.get_position()
+            if "u_invVP" in self.dust_program:
+                self.dust_program["u_invVP"].write(glm.inverse(vp))
+            if "u_dustWeight" in self.dust_program:
+                self.dust_program["u_dustWeight"].value = dust_weight
+            if "u_galaxyModel" in self.dust_program:
+                # To rotate dust WITH galaxy, we pass inverse galaxy rotation so camera effectively rotates
+                inv_model = glm.rotate(glm.mat4(1.0), -self.galaxy_rotation_angle, glm.vec3(0.0, 1.0, 0.0))
+                self.dust_program["u_galaxyModel"].write(inv_model)
+            
+            # Dust tunable params
+            if "u_dustOpacity" in self.dust_program: self.dust_program["u_dustOpacity"].value = 1.0
+            if "u_dustWidth" in self.dust_program: self.dust_program["u_dustWidth"].value = 0.25
+            if "u_dustArmOffset" in self.dust_program: self.dust_program["u_dustArmOffset"].value = -0.15
+            if "u_dustNoiseScale" in self.dust_program: self.dust_program["u_dustNoiseScale"].value = 0.8
+            if "u_dustDensity" in self.dust_program: self.dust_program["u_dustDensity"].value = 2.0
+            
+            self.dust_vao.render(mode=self.ctx.TRIANGLE_STRIP)
+
+        # ----------------------------------------------------------
+        # PASS 1.75: Composite dust onto scene
+        # ----------------------------------------------------------
+        self.comp_fbo.use()
+        self.ctx.clear(0.0, 0.0, 0.0, 1.0)
+        self.ctx.disable(self.ctx.BLEND)
+        
+        self.scene_tex.use(location=0)
+        self.dust_tex.use(location=1)
+        self.comp_program["u_scene"].value = 0
+        self.comp_program["u_dust"].value = 1
+        if "u_debugDust" in self.comp_program:
+            self.comp_program["u_debugDust"].value = self.debug_dust
+        self.comp_vao.render(mode=self.ctx.TRIANGLE_STRIP)
+
         # ----------------------------------------------------------
         # PASS 2
         # Post Processing
@@ -496,7 +612,7 @@ class MilkyWaySimulation(mglw.WindowConfig):
         self.ctx.clear(0.02, 0.02, 0.03, 1.0)
         self.ctx.disable(self.ctx.DEPTH_TEST)
 
-        self.scene_tex.use(location=0)
+        self.comp_tex.use(location=0)
 
         self.post_program["scene"].value = 0
 

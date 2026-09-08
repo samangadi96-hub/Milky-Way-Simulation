@@ -5,7 +5,7 @@ import glm
 class GalacticDisk:
     def __init__(self, ctx, base_dir):
         self.ctx = ctx
-        self.num_stars = 200000
+        self.num_stars = 2000000
         
         # Load shaders (reusing bulge shaders for now, but they will have u_galaxyAngle)
         with open(base_dir / "shaders" / "bulge_vert.glsl", encoding="utf-8") as f:
@@ -29,10 +29,18 @@ class GalacticDisk:
         OUTER_RADIUS = 45.0
         BULGE_RADIUS = 6.0          # Where arms fully emerge
         
+        DISK_SCALE = 8.0
+        
         # 1. Generate Radii
-        # Base exponential distribution to keep the overall disk density profile
-        radius = np.random.exponential(8.0, self.num_stars)
-        radius = np.clip(radius, INNER_RADIUS, OUTER_RADIUS)
+        # Use Gamma distribution (shape=2) to get probability P(r) ~ r * exp(-r / DISK_SCALE)
+        # This accounts for increasing circumference area at larger radii.
+        radius = np.random.gamma(shape=2.0, scale=DISK_SCALE, size=self.num_stars)
+        
+        # Truncate via rejection sampling instead of clipping to avoid artificial rings
+        invalid = (radius < INNER_RADIUS) | (radius > OUTER_RADIUS)
+        while np.any(invalid):
+            radius[invalid] = np.random.gamma(shape=2.0, scale=DISK_SCALE, size=np.sum(invalid))
+            invalid = (radius < INNER_RADIUS) | (radius > OUTER_RADIUS)
         
         # 2. Determine Arm vs Inter-arm Population (Density Waves)
         # Arms emerge smoothly from the bulge
