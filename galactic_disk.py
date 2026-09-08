@@ -5,7 +5,7 @@ import glm
 class GalacticDisk:
     def __init__(self, ctx, base_dir):
         self.ctx = ctx
-        self.num_stars = 40000
+        self.num_stars = 200000
         
         # Load shaders (reusing bulge shaders for now, but they will have u_galaxyAngle)
         with open(base_dir / "shaders" / "bulge_vert.glsl", encoding="utf-8") as f:

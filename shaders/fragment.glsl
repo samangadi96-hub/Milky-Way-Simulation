@@ -321,10 +321,31 @@ void main()
         // ==========================================
         // GENERAL RELATIVITY (Spacetime Curvature)
         // ==========================================
+        
+        // LOCAL 3-9 FIX ONLY
+        // Distance-aware adaptive step size to bridge the empty space between the camera and the disk.
+        // Active only when camera.distance is between 3.0 and 9.0.
+        float current_dt = dt;
+        float t_fix = smoothstep(2.8, 3.2, u_camDistance) * (1.0 - smoothstep(9.0, 10.5, u_camDistance));
+        
+        if (t_fix > 0.001 && r > 12.0) {
+            float empty_space = max(0.0, cam_radius - 12.0);
+            float safe_steps = max(20.0, float(max_steps) - 240.0); // leave 240 steps for the disk
+            float max_boost = max(dt, empty_space / safe_steps);
+            
+            // Smoothly ramp down the boost as we approach the accretion disk (12.0 to 18.0)
+            // to ensure we don't overshoot it.
+            float approach_factor = smoothstep(12.0, 18.0, r);
+            float boosted_dt = mix(dt, max_boost, approach_factor);
+            
+            // Apply the correction only based on how deep we are in the 3-9 range
+            current_dt = mix(dt, boosted_dt, t_fix);
+        }
+        
         vec3 acceleration = -1.5 * Rs * h2 / (r2 * r2 * r) * p;
-        v += acceleration * dt;
+        v += acceleration * current_dt;
         v = normalize(v); 
-        p += v * dt;
+        p += v * current_dt;
         
         // Early exit if the gas becomes completely opaque
         if (transmittance < 0.01) break; 

@@ -434,6 +434,35 @@ class MilkyWaySimulation(mglw.WindowConfig):
         # Render Galactic Disk first, then Bulge
         # Fade out 3D stars when very close to avoid stacking over procedural stars
         star_visibility = 1.0 
+        base_visibility = 1.0 - lod_state["near_weight"]
+        star_visibility = base_visibility
+        
+        # LOCAL 3-9 FIX ONLY: Restore 3D moving stars in the near region
+        # Ensures they don't abruptly appear or disappear by blending from 2.0 to 9.0
+        dist = self.camera.distance
+        if 2.0 <= dist <= 9.0:
+            def smoothstep_py(e0, e1, x):
+                t = max(0.0, min(1.0, (x - e0) / (e1 - e0)))
+                return t * t * (3.0 - 2.0 * t)
+                
+            # Get the exact base visibility that will be active at distance 9.0
+            # to ensure a mathematically perfect, seamless merge.
+            base_at_9 = 1.0 - self.lod_manager.get_state(9.0)["near_weight"]
+            
+            if dist < 4.0:
+                # Ramp up: 0.0 at dist 2.0 -> ~0.125 at dist 3.0 -> 0.25 at dist 4.0
+                t = smoothstep_py(2.0, 4.0, dist)
+                local_vis = t * 0.25
+            elif dist < 7.0:
+                # Moderate to Strong: 0.25 at dist 4.0 -> ~0.30 at dist 5.0 -> 0.45 at dist 7.0
+                t = smoothstep_py(4.0, 7.0, dist)
+                local_vis = 0.25 * (1.0 - t) + 0.45 * t
+            else:
+                # Merge down to normal transition: 0.45 at dist 7.0 -> base_at_9 at dist 9.0
+                t = smoothstep_py(7.0, 9.0, dist)
+                local_vis = 0.45 * (1.0 - t) + base_at_9 * t
+                
+            star_visibility = local_vis
         
         self.galactic_disk.render(
             self.camera, 
