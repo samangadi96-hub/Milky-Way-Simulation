@@ -236,3 +236,21 @@ class Camera:
         near = 0.01
         far = 10000.0
         return glm.perspective(fov, aspect_ratio, near, far)
+
+    @property
+    def absolute_distance(self) -> float:
+        return self.distance
+
+    def get_position(self):
+        y = self.distance * math.cos(self.inclination)
+        r = self.distance * math.sin(self.inclination)
+        x = r * math.sin(self.azimuth)
+        z = r * math.cos(self.azimuth)
+        return (x, y, z)
+
+    def reset(self):
+        self.target_inclination = math.radians(75.0)
+        self.target_azimuth = 0.0
+        self.target_distance = 1.0
+        self._vel_azimuth = 0.0
+        self._vel_inclination = 0.0
