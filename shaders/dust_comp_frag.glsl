@@ -68,7 +68,8 @@ void main() {
     
     float eff_dust_trans = mix(1.0, dust_trans, dustDepthFactor);
     float eff_neb_trans = mix(1.0, nebula_col.a, nebDepthFactor);
-    vec3 eff_neb_emission = nebula_col.rgb * nebDepthFactor;
+    // Additive emission is not blocked by point stars (which are the only things writing to depth)
+    vec3 eff_neb_emission = nebula_col.rgb;
     
     vec3 dustTint = mix(vec3(1.0), vec3(1.0, 0.97, 0.92), (1.0 - eff_dust_trans) * 0.5);
     

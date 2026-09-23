@@ -119,18 +119,21 @@ void main() {
                         vec3 p_warp = p_noise + vec3(n_base * 2.0);
                         float n_detail = fbm3(p_warp * 2.5);
                         
-                        float shape = n_base * 0.6 + n_detail * 0.4;
-                        float cloud_density = smoothstep(0.3, 0.7, shape * falloff);
+                        // Boost shape to ensure it reaches higher values (fbm3 max is ~0.875)
+                        float shape = (n_base * 0.6 + n_detail * 0.4) * 1.5;
+                        
+                        // Lower threshold significantly so clouds fill more of the bounding sphere
+                        float cloud_density = smoothstep(0.1, 0.7, shape * falloff);
                         
                         if (cloud_density > 0.01) {
                             vec4 c_data = u_nebulae_col[j];
                             vec3 color = c_data.rgb;
                             float strength = c_data.a;
                             
-                            // High emission in the dense cores
-                            float em = cloud_density * cloud_density * strength * 20.0;
+                            // High emission in the dense cores, but constrained to not instantly blow out
+                            float em = cloud_density * strength * 8.0;
                             
-                            local_density += cloud_density * strength * 2.0;
+                            local_density += cloud_density * strength * 0.8;
                             local_emission += color * em;
                         }
                     }

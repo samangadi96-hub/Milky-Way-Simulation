@@ -18,15 +18,16 @@ class NebulaManager:
         MIN_R = 6.0
         MAX_R = 40.0
         
-        # Emission colors
-        # Deep red/pink for H-II regions
-        color_hii_1 = np.array([1.0, 0.15, 0.3])
-        color_hii_2 = np.array([1.0, 0.25, 0.4])
-        color_hii_3 = np.array([0.9, 0.05, 0.2])
+        # Emission colors (Realistic Astrophotography H-II palette)
+        # H-alpha (656 nm, deep red) + H-beta (486 nm, blue-cyan) + O-III (500 nm, teal)
+        color_hii_crimson = np.array([0.95, 0.05, 0.15]) # Pure deep H-alpha red
+        color_hii_magenta = np.array([1.00, 0.15, 0.35]) # Standard H-II magenta/pink
+        color_hii_salmon  = np.array([1.00, 0.30, 0.40]) # Warmer pink
+        color_hii_pale    = np.array([1.00, 0.45, 0.55]) # Pale pink (mixed with O-III)
         
-        # Blue/white for reflection
-        color_ref_1 = np.array([0.4, 0.6, 1.0])
-        color_ref_2 = np.array([0.3, 0.5, 0.9])
+        # Blue/white for reflection nebulae (dust scattering hot young star light)
+        color_ref_bright = np.array([0.4, 0.7, 1.0])
+        color_ref_dusty  = np.array([0.2, 0.4, 0.8])
         
         for i in range(num_nebulae):
             # 1. Position along spiral arms
@@ -67,16 +68,17 @@ class NebulaManager:
             # Reflection fraction (minority are blue)
             ref_roll = np.random.random()
             if ref_roll < 0.05: # 5% strong reflection
-                c = color_ref_1
+                c = color_ref_bright
                 emission_strength = np.random.uniform(1.2, 2.0)
             elif ref_roll < 0.2: # 15% weak reflection / mixed
-                c = color_ref_2 * 0.5 + color_hii_1 * 0.5
+                c = color_ref_dusty * 0.4 + color_hii_magenta * 0.6
                 emission_strength = np.random.uniform(1.0, 1.5)
             else: # 80% H-II
                 c_roll = np.random.random()
-                if c_roll < 0.33: c = color_hii_1
-                elif c_roll < 0.66: c = color_hii_2
-                else: c = color_hii_3
+                if c_roll < 0.30: c = color_hii_crimson
+                elif c_roll < 0.70: c = color_hii_magenta
+                elif c_roll < 0.90: c = color_hii_salmon
+                else: c = color_hii_pale
                 emission_strength = np.random.uniform(1.5, 2.5)
                 
             # Add some variance to color
@@ -92,24 +94,59 @@ class NebulaManager:
             })
             
             # 3. Generate Young Bright Stars associated with this nebula
-            if size_roll < 0.3: # Only medium and hero regions have noticeable bright young stars
-                num_stars = np.random.randint(2, 6) if size_roll < 0.1 else np.random.randint(1, 3)
-                for _ in range(num_stars):
-                    # Place star inside/near the nebula
-                    sx = x + np.random.normal(0, radius * 0.3)
-                    sy = y + np.random.normal(0, radius * 0.1)
-                    sz = z + np.random.normal(0, radius * 0.3)
+            # Create dense star clusters (aggregates) that stand out from the surrounding disk
+            if size_roll < 0.4: # Top 40% of nebulae get star clusters
+                if size_roll < 0.1: # Hero regions get massive clusters
+                    num_stars = np.random.randint(200, 500)
+                elif size_roll < 0.25: # Medium regions get dense clusters
+                    num_stars = np.random.randint(70, 150)
+                else: # Smaller regions get sparse clusters
+                    num_stars = np.random.randint(20, 50)
                     
-                    # Hot blue-white colors
+                for _ in range(num_stars):
+                    # Place star concentrated around the nebula core
+                    dist_scale = np.random.gamma(shape=1.5, scale=0.3)
+                    theta_star = np.random.uniform(0, 2 * np.pi)
+                    phi_star = np.random.uniform(0, np.pi)
+                    
+                    # 3D offset (flattened slightly in the Y axis)
+                    dx = radius * dist_scale * np.sin(phi_star) * np.cos(theta_star)
+                    dy = (radius * dist_scale * np.cos(phi_star)) * 0.4
+                    dz = radius * dist_scale * np.sin(phi_star) * np.sin(theta_star)
+                    
+                    sx = x + dx
+                    sy = y + dy
+                    sz = z + dz
+                    
+                    # Cluster star colors:
+                    # Blend of extremely hot young blue stars, white giants, 
+                    # and intensely colored stars matching the nebula gas to simulate unresolved glowing knots.
                     sc_roll = np.random.random()
-                    if sc_roll < 0.5:
-                        scolor = [0.9, 0.95, 1.0]
+                    if sc_roll < 0.3:
+                        scolor = [0.7, 0.85, 1.0] # Bright young blue
+                    elif sc_roll < 0.5:
+                        scolor = [0.9, 0.95, 1.0] # Blue-white
+                    elif sc_roll < 0.65:
+                        scolor = [1.0, 1.0, 1.0] # Pure white
                     else:
-                        scolor = [0.8, 0.9, 1.0]
+                        # 35% of stars in the cluster take on the glowing gas color of the nebula itself
+                        scolor = c 
                         
-                    # Large sizes and high brightness
-                    ssize = np.random.uniform(0.1, 0.2)
-                    sbright = np.random.uniform(1.5, 2.5)
+                    # Add subtle variance
+                    scolor = np.clip(np.array(scolor) + np.random.normal(0, 0.05, 3), 0.0, 1.0)
+                        
+                    # Sizes and brightness
+                    # A few very bright massive stars, mostly smaller cluster members
+                    s_roll = np.random.random()
+                    if s_roll < 0.02:
+                        ssize = np.random.uniform(0.12, 0.25) # O-type giant
+                        sbright = np.random.uniform(2.0, 3.5)
+                    elif s_roll < 0.15:
+                        ssize = np.random.uniform(0.06, 0.12) # B-type
+                        sbright = np.random.uniform(1.2, 2.0)
+                    else:
+                        ssize = np.random.uniform(0.02, 0.05) # Standard cluster members
+                        sbright = np.random.uniform(0.5, 1.0)
                     
                     self.stars_data.append([sx, sy, sz, scolor[0], scolor[1], scolor[2], ssize, sbright])
 
