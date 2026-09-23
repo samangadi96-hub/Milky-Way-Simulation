@@ -5,7 +5,7 @@ import glm
 class GalacticBulge:
     def __init__(self, ctx, base_dir):
         self.ctx = ctx
-        self.num_stars = 80000
+        self.num_stars = 800000
         
         # Load shaders
         with open(base_dir / "shaders" / "bulge_vert.glsl", encoding="utf-8") as f:

@@ -12,6 +12,7 @@ from lod import LODManager
 from renderer import Renderer
 from galaxy import GalacticBulge
 from galactic_disk import GalacticDisk
+from nebula import NebulaManager
 
 class MilkyWaySimulation(mglw.WindowConfig):
 
@@ -32,7 +33,8 @@ class MilkyWaySimulation(mglw.WindowConfig):
         self.camera      = Camera()
         self.lod_manager = LODManager()
         self.bulge       = GalacticBulge(self.ctx, Path(__file__).parent)
-        self.galactic_disk = GalacticDisk(self.ctx, Path(__file__).parent)
+        self.nebula_mgr  = NebulaManager()
+        self.galactic_disk = GalacticDisk(self.ctx, Path(__file__).parent, nebula_stars=self.nebula_mgr.get_stars_array())
         
         self.galaxy_rotation_angle = 0.0
 
@@ -45,8 +47,9 @@ class MilkyWaySimulation(mglw.WindowConfig):
         self.move_right = False
         self._zoom_in   = False
         self._zoom_out  = False
+        self._zoom_out  = False
         self.debug_dust = False
-        
+        self.debug_nebula = False
 
         print()
         print('  Milky Way Simulation - Controls')
@@ -59,6 +62,7 @@ class MilkyWaySimulation(mglw.WindowConfig):
         print('  Q / E            -> zoom in / out')
         print('  R                -> reset camera')
         print('  T                -> toggle dust debug')
+        print('  N                -> toggle nebula debug')
         print('  --------------------------------')
         print()
 
@@ -195,6 +199,30 @@ class MilkyWaySimulation(mglw.WindowConfig):
             self.comp_program, [(self.quad_buffer, "2f 2f", "in_vert", "in_texcoord")]
         )
 
+        # ==========================================================
+        # Nebula Volume Shader (quarter-res)
+        # ==========================================================
+        with open(BASE_DIR / "shaders" / "nebula_vol_vert.glsl", encoding="utf-8") as f:
+            neb_vert = f.read()
+        with open(BASE_DIR / "shaders" / "nebula_vol_frag.glsl", encoding="utf-8") as f:
+            neb_frag = f.read()
+        self.nebula_program = self.ctx.program(
+            vertex_shader=neb_vert, fragment_shader=neb_frag,
+        )
+        self.nebula_vao = self.ctx.vertex_array(
+            self.nebula_program, [(self.main_quad_buffer, "2f", "in_position")]
+        )
+        
+        # Pass static nebula data to shader
+        neb_pos, neb_col = self.nebula_mgr.get_shader_uniforms()
+        if "u_numNebulae" in self.nebula_program:
+            self.nebula_program["u_numNebulae"].value = self.nebula_mgr.num_nebulae
+        for i in range(150):
+            if f"u_nebulae_pos[{i}]" in self.nebula_program:
+                self.nebula_program[f"u_nebulae_pos[{i}]"].value = tuple(neb_pos[i*4:i*4+4])
+            if f"u_nebulae_col[{i}]" in self.nebula_program:
+                self.nebula_program[f"u_nebulae_col[{i}]"].value = tuple(neb_col[i*4:i*4+4])
+
 
         self.renderer = Renderer(
                     self.ctx,
@@ -241,6 +269,13 @@ class MilkyWaySimulation(mglw.WindowConfig):
         self.dust_tex.filter = (self.ctx.LINEAR, self.ctx.LINEAR)
         self.dust_fbo = self.ctx.framebuffer(color_attachments=[self.dust_tex])
 
+        # Quarter-resolution FBO for nebula pass
+        self.nebula_col_tex = self.ctx.texture((qw, qh), 4, dtype='f2') # RGBA16F: RGB=Emission, A=Transmittance
+        self.nebula_col_tex.filter = (self.ctx.LINEAR, self.ctx.LINEAR)
+        self.nebula_depth_tex = self.ctx.texture((qw, qh), 1, dtype='f2') # R16F: Front depth
+        self.nebula_depth_tex.filter = (self.ctx.LINEAR, self.ctx.LINEAR)
+        self.nebula_fbo = self.ctx.framebuffer(color_attachments=[self.nebula_col_tex, self.nebula_depth_tex])
+
         # Intermediate composited scene FBO (full res)
         self.comp_tex = self.ctx.texture((width, height), 4)
         self.comp_fbo = self.ctx.framebuffer(color_attachments=[self.comp_tex])
@@ -255,6 +290,9 @@ class MilkyWaySimulation(mglw.WindowConfig):
         self.fbo.release()
         self.dust_tex.release()
         self.dust_fbo.release()
+        self.nebula_col_tex.release()
+        self.nebula_depth_tex.release()
+        self.nebula_fbo.release()
         self.comp_tex.release()
         self.comp_fbo.release()
 
@@ -309,6 +347,9 @@ class MilkyWaySimulation(mglw.WindowConfig):
 
             elif key == self.wnd.keys.T:
                 self.debug_dust = not self.debug_dust
+
+            elif key == self.wnd.keys.N:
+                self.debug_nebula = not self.debug_nebula
 
         elif action == self.wnd.keys.ACTION_RELEASE:
 
@@ -657,7 +698,43 @@ class MilkyWaySimulation(mglw.WindowConfig):
             self.dust_vao.render(mode=self.ctx.TRIANGLE_STRIP)
 
         # ----------------------------------------------------------
-        # PASS 1.75: Composite dust onto scene
+        # PASS 1.6: Galaxy Nebulae (quarter-res)
+        # ----------------------------------------------------------
+        nebula_weight = 0.0
+        if dist > 8.0:
+            if dist < 12.0:
+                t = max(0.0, min(1.0, (dist - 8.0) / 4.0))
+                nebula_weight = t * t * (3.0 - 2.0 * t) * 0.3
+            elif dist < 30.0:
+                t = max(0.0, min(1.0, (dist - 12.0) / 18.0))
+                nebula_weight = 0.3 + t * t * (3.0 - 2.0 * t) * 0.7
+            else:
+                nebula_weight = 1.0
+                
+        self.nebula_fbo.use()
+        # Clear: A=1.0 (transmittance), Depth=0.0
+        self.ctx.clear(0.0, 0.0, 0.0, 1.0) 
+        self.ctx.disable(self.ctx.BLEND)
+        self.ctx.disable(self.ctx.DEPTH_TEST)
+        
+        if nebula_weight > 0.001:
+            vp = self.camera.get_projection_matrix(bh.aspect_ratio) * self.camera.get_view_matrix()
+            if "u_camPos" in self.nebula_program:
+                self.nebula_program["u_camPos"].value = self.camera.get_position()
+            if "u_invVP" in self.nebula_program:
+                self.nebula_program["u_invVP"].write(glm.inverse(vp))
+            if "u_nebulaWeight" in self.nebula_program:
+                self.nebula_program["u_nebulaWeight"].value = nebula_weight
+            if "u_galaxyModel" in self.nebula_program:
+                inv_model = glm.rotate(glm.mat4(1.0), -self.galaxy_rotation_angle, glm.vec3(0.0, 1.0, 0.0))
+                self.nebula_program["u_galaxyModel"].write(inv_model)
+            if "u_camDist" in self.nebula_program:
+                self.nebula_program["u_camDist"].value = dist
+                
+            self.nebula_vao.render(mode=self.ctx.TRIANGLE_STRIP)
+
+        # ----------------------------------------------------------
+        # PASS 1.75: Composite dust & nebulae onto scene
         # ----------------------------------------------------------
         self.comp_fbo.use()
         self.ctx.clear(0.0, 0.0, 0.0, 1.0)
@@ -665,12 +742,20 @@ class MilkyWaySimulation(mglw.WindowConfig):
         
         self.scene_tex.use(location=0)
         self.dust_tex.use(location=1)
-        self.depth_tex.use(location=2)
+        self.scene_depth_tex = self.depth_tex
+        self.scene_depth_tex.use(location=4)
+        self.nebula_col_tex.use(location=2)
+        self.nebula_depth_tex.use(location=3)
+        
         self.comp_program["u_scene"].value = 0
         self.comp_program["u_dust"].value = 1
-        self.comp_program["u_sceneDepth"].value = 2
+        self.comp_program["u_nebulaColor"].value = 2
+        self.comp_program["u_nebulaDepth"].value = 3
+        self.comp_program["u_sceneDepth"].value = 4
         if "u_debugDust" in self.comp_program:
             self.comp_program["u_debugDust"].value = self.debug_dust
+        if "u_debugNebula" in self.comp_program:
+            self.comp_program["u_debugNebula"].value = self.debug_nebula
         if "u_nearPlane" in self.comp_program:
             self.comp_program["u_nearPlane"].value = 0.01
         if "u_farPlane" in self.comp_program:

@@ -3,9 +3,9 @@ import moderngl
 import glm
 
 class GalacticDisk:
-    def __init__(self, ctx, base_dir):
+    def __init__(self, ctx, base_dir, nebula_stars=None):
         self.ctx = ctx
-        self.num_stars = 200000
+        self.num_stars = 2000000
         
         # Load shaders (reusing bulge shaders for now, but they will have u_galaxyAngle)
         with open(base_dir / "shaders" / "bulge_vert.glsl", encoding="utf-8") as f:
@@ -137,6 +137,10 @@ class GalacticDisk:
         brightness[large] = np.random.uniform(0.8, 1.5, large.sum())
         
         star_data = np.column_stack((positions, colors, sizes, brightness)).astype('f4')
+        
+        if nebula_stars is not None and len(nebula_stars) > 0:
+            star_data = np.vstack((star_data, nebula_stars))
+            self.num_stars += len(nebula_stars)
         
         self.vbo = self.ctx.buffer(star_data.tobytes())
         self.vao = self.ctx.vertex_array(
