@@ -3,7 +3,6 @@
 uniform float aspectRatio;
 uniform float u_camDistance;
 uniform float u_diskSquish;
-uniform float u_azimuth;
 uniform float u_lodWeight;
 uniform float u_diskThickness;
 uniform float u_glowIntensity;
@@ -15,6 +14,12 @@ uniform float u_outerDisk;
 uniform float u_time;
 uniform float u_volumetricDetail;
 uniform float u_proceduralStarWeight;
+
+// Real camera basis from Python (position is in BH-local space)
+uniform vec3 u_cameraPosition;
+uniform vec3 u_cameraForward;
+uniform vec3 u_cameraRight;
+uniform vec3 u_cameraUp;
 
 in vec2 frag_pos;
 out vec4 fragColor;
@@ -38,7 +43,8 @@ vec3 get_stars(vec2 p) {
 void main() {
     vec2 uv = vec2(frag_pos.x * aspectRatio, frag_pos.y);
     
-    float cam_radius = max(u_camDistance * 12.0, 0.1);
+    // Scale from screen space to BH-local space using real camera distance
+    float cam_radius = max(length(u_cameraPosition), 0.1);
     float fov_zoom = 2.0;
     
     vec2 p = uv * (cam_radius / fov_zoom);
@@ -61,6 +67,7 @@ void main() {
     }
     
     if (r < shadow_radius) {
+        // Inside shadow: opaque black — NO background stars
         color = vec3(0.0);
         transmittance = 0.0;
     } else {
@@ -113,17 +120,8 @@ void main() {
         }
     }
     
-    // Background Stars
-    float cam_height = mix(0.1, 5.0, max(u_diskSquish, 0.02));
-    vec3 ray_origin = vec3(
-        sin(u_azimuth) * cam_radius,
-        cam_height,
-        cos(u_azimuth) * cam_radius
-    );
-    vec3 forward = normalize(vec3(0.0) - ray_origin);
-    vec3 right = normalize(cross(vec3(0.0, 1.0, 0.0), forward));
-    vec3 up = cross(forward, right);
-    vec3 ray_dir = normalize(forward * fov_zoom + uv.x * right + uv.y * up);
+    // Background Stars — use real camera basis
+    vec3 ray_dir = normalize(u_cameraForward * fov_zoom + uv.x * u_cameraRight + uv.y * u_cameraUp);
     
     vec2 sky_uv = vec2(atan(ray_dir.z, ray_dir.x), asin(clamp(ray_dir.y, -1.0, 1.0)));
     vec3 background_stars = get_stars(sky_uv * 10.0) * u_proceduralStarWeight;

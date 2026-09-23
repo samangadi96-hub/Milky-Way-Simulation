@@ -5,6 +5,7 @@ import moderngl_window as mglw
 import numpy as np
 
 from blackhole import BlackHole
+BLACK_HOLE_LOCAL_SCALE = BlackHole.BLACK_HOLE_LOCAL_SCALE
 from camera import Camera
 import glm
 from lod import LODManager
@@ -223,7 +224,10 @@ class MilkyWaySimulation(mglw.WindowConfig):
     def create_framebuffer(self, width, height):
 
         self.scene_tex = self.ctx.texture((width, height), 4)
-        self.depth_tex = self.ctx.depth_renderbuffer((width, height))
+        # Use depth TEXTURE (not renderbuffer) so it can be sampled in shaders
+        self.depth_tex = self.ctx.depth_texture((width, height))
+        # Disable comparison mode so we read raw depth values, not shadow-map 0/1
+        self.depth_tex.compare_func = ''
 
         self.fbo = self.ctx.framebuffer(
             color_attachments=[self.scene_tex],
@@ -231,8 +235,9 @@ class MilkyWaySimulation(mglw.WindowConfig):
         )
 
         # Quarter-resolution FBO for dust pass
+        # 2 components (RG16F): R = transmittance, G = front dust depth
         qw, qh = max(width // 4, 1), max(height // 4, 1)
-        self.dust_tex = self.ctx.texture((qw, qh), 4, dtype='f2')
+        self.dust_tex = self.ctx.texture((qw, qh), 2, dtype='f2')
         self.dust_tex.filter = (self.ctx.LINEAR, self.ctx.LINEAR)
         self.dust_fbo = self.ctx.framebuffer(color_attachments=[self.dust_tex])
 
@@ -351,7 +356,22 @@ class MilkyWaySimulation(mglw.WindowConfig):
             self.camera.zoom_out(frametime)
 
         self.camera.update(frametime)
-       
+
+        # ----------------------------------------------------------
+        # Camera data for black-hole shaders (computed once per frame)
+        # ----------------------------------------------------------
+        cam_pos   = self.camera.get_position()
+        cam_fwd   = self.camera.get_forward()
+        cam_right = self.camera.get_right()
+        cam_up    = self.camera.get_up()
+
+        # Convert camera position to black-hole local space
+        bh_cam_pos = (
+            cam_pos[0] * BLACK_HOLE_LOCAL_SCALE,
+            cam_pos[1] * BLACK_HOLE_LOCAL_SCALE,
+            cam_pos[2] * BLACK_HOLE_LOCAL_SCALE,
+        )
+
 
         # ----------------------------------------------------------
         # LOD
@@ -384,9 +404,12 @@ class MilkyWaySimulation(mglw.WindowConfig):
         self.fbo.use()
         self.ctx.clear(0.0, 0.0, 0.0, 1.0, depth=1.0)
         
-        # We need depth test for the stars, but disable depth mask so they don't occlude each other
+        # Enable depth test AND depth writes for stars.
+        # This writes the nearest star's depth per pixel, which the dust
+        # composite shader uses for foreground/background occlusion.
+        # Additive blending still works correctly for color output.
         self.ctx.enable(self.ctx.DEPTH_TEST)
-        self.ctx.depth_mask = False
+        self.ctx.depth_mask = True
         
         # Use standard additive blending for 3D stars
         self.ctx.blend_func = (self.ctx.SRC_ALPHA, self.ctx.ONE)
@@ -412,13 +435,19 @@ class MilkyWaySimulation(mglw.WindowConfig):
             self.program["u_innerDisk"].value = bh.inner_disk_radius
         if "u_outerDisk" in self.program:
             self.program["u_outerDisk"].value = bh.outer_disk_radius
-        if "u_diskSquish" in self.program:
-            self.program["u_diskSquish"].value = self.camera.disk_squish
-        if "u_azimuth" in self.program:
-            self.program["u_azimuth"].value = self.camera.azimuth
         if "u_camDistance" in self.program:
             self.program["u_camDistance"].value = self.camera.absolute_distance
-            
+
+        # Real camera basis (replaces synthetic u_azimuth/u_diskSquish camera)
+        if "u_cameraPosition" in self.program:
+            self.program["u_cameraPosition"].value = bh_cam_pos
+        if "u_cameraForward" in self.program:
+            self.program["u_cameraForward"].value = cam_fwd
+        if "u_cameraRight" in self.program:
+            self.program["u_cameraRight"].value = cam_right
+        if "u_cameraUp" in self.program:
+            self.program["u_cameraUp"].value = cam_up
+
         # Continuous LOD Parameters for NEAR
         if "u_lodDetail" in self.program:
             self.program["u_lodDetail"].value = lod_state["ray_march_detail"]
@@ -440,8 +469,6 @@ class MilkyWaySimulation(mglw.WindowConfig):
             self.medium_program["u_diskSquish"].value = self.camera.disk_squish
         if "u_time" in self.medium_program:
             self.medium_program["u_time"].value = time
-        if "u_azimuth" in self.medium_program:
-            self.medium_program["u_azimuth"].value = self.camera.azimuth
         if "u_diskThickness" in self.medium_program:
             self.medium_program["u_diskThickness"].value = lod_state["disk_thickness"]
         if "u_glowIntensity" in self.medium_program:
@@ -463,6 +490,16 @@ class MilkyWaySimulation(mglw.WindowConfig):
         if "u_bhScreenPos" in self.medium_program:
             self.medium_program["u_bhScreenPos"].value = bh_screen_pos
 
+        # Real camera basis for medium shader
+        if "u_cameraPosition" in self.medium_program:
+            self.medium_program["u_cameraPosition"].value = bh_cam_pos
+        if "u_cameraForward" in self.medium_program:
+            self.medium_program["u_cameraForward"].value = cam_fwd
+        if "u_cameraRight" in self.medium_program:
+            self.medium_program["u_cameraRight"].value = cam_right
+        if "u_cameraUp" in self.medium_program:
+            self.medium_program["u_cameraUp"].value = cam_up
+
         # Billboard LOD Uniforms
         if "u_camDistance" in self.billboard_program:
             self.billboard_program["u_camDistance"].value = self.camera.absolute_distance
@@ -472,8 +509,6 @@ class MilkyWaySimulation(mglw.WindowConfig):
             self.billboard_program["aspectRatio"].value = bh.aspect_ratio
         if "u_diskSquish" in self.billboard_program:
             self.billboard_program["u_diskSquish"].value = self.camera.disk_squish
-        if "u_azimuth" in self.billboard_program:
-            self.billboard_program["u_azimuth"].value = self.camera.azimuth
         if "u_diskThickness" in self.billboard_program:
             self.billboard_program["u_diskThickness"].value = lod_state["disk_thickness"]
         if "u_glowIntensity" in self.billboard_program:
@@ -494,6 +529,16 @@ class MilkyWaySimulation(mglw.WindowConfig):
             self.billboard_program["u_proceduralStarWeight"].value = lod_state["near_weight"]
         if "u_bhScreenPos" in self.billboard_program:
             self.billboard_program["u_bhScreenPos"].value = bh_screen_pos
+
+        # Real camera basis for billboard shader
+        if "u_cameraPosition" in self.billboard_program:
+            self.billboard_program["u_cameraPosition"].value = bh_cam_pos
+        if "u_cameraForward" in self.billboard_program:
+            self.billboard_program["u_cameraForward"].value = cam_fwd
+        if "u_cameraRight" in self.billboard_program:
+            self.billboard_program["u_cameraRight"].value = cam_right
+        if "u_cameraUp" in self.billboard_program:
+            self.billboard_program["u_cameraUp"].value = cam_up
 
         # Render Galactic Disk first, then Bulge
         # Fade out 3D stars when very close to avoid stacking over procedural stars
@@ -544,24 +589,42 @@ class MilkyWaySimulation(mglw.WindowConfig):
         # ----------------------------------------------------------
         # Post-process passes (Black hole raymarcher)
         # ----------------------------------------------------------
+        # Disable depth test for BH — it renders as fullscreen quads.
+        # depth_mask=False prevents BH quads from overwriting star depths
+        # that the dust compositor needs.
         self.ctx.disable(self.ctx.DEPTH_TEST)
-        self.ctx.depth_mask = True # restore depth mask
+        self.ctx.depth_mask = False
         
         # Composite mode: StarColor * Transmittance + GasColor * 1.0
         self.ctx.blend_func = (self.ctx.ONE, self.ctx.SRC_ALPHA)
         
         self.renderer.render(lod_state)
+        
+        # Restore depth mask after BH rendering
+        self.ctx.depth_mask = True
 
         # ----------------------------------------------------------
         # PASS 1.5: Galaxy Dust (quarter-res)
         # ----------------------------------------------------------
         dust_weight = 0.0
         if dist > 8.0:
-            t = max(0.0, min(1.0, (dist - 8.0) / (25.0 - 8.0)))
-            dust_weight = t * t * (3.0 - 2.0 * t)
+            # Smoother, wider transition curve
+            # ~8-12: gradual introduction
+            # ~12-30: clearly visible
+            # ~30-50: strongest
+            # 50+: sustained
+            if dist < 15.0:
+                t = max(0.0, min(1.0, (dist - 8.0) / 7.0))
+                dust_weight = t * t * (3.0 - 2.0 * t) * 0.4
+            elif dist < 30.0:
+                t = max(0.0, min(1.0, (dist - 15.0) / 15.0))
+                dust_weight = 0.4 + t * t * (3.0 - 2.0 * t) * 0.5
+            else:
+                t = max(0.0, min(1.0, (dist - 30.0) / 20.0))
+                dust_weight = 0.9 + t * t * (3.0 - 2.0 * t) * 0.1
         
         self.dust_fbo.use()
-        self.ctx.clear(1.0, 1.0, 1.0, 1.0) # Clear to 1.0 transmission
+        self.ctx.clear(1.0, 0.0, 0.0, 1.0) # R=1.0 (full transmittance), G=0.0 (no dust depth)
         self.ctx.disable(self.ctx.BLEND)
         self.ctx.disable(self.ctx.DEPTH_TEST)
         
@@ -579,11 +642,17 @@ class MilkyWaySimulation(mglw.WindowConfig):
                 self.dust_program["u_galaxyModel"].write(inv_model)
             
             # Dust tunable params
-            if "u_dustOpacity" in self.dust_program: self.dust_program["u_dustOpacity"].value = 1.0
+            if "u_dustOpacity" in self.dust_program: self.dust_program["u_dustOpacity"].value = 1.2
             if "u_dustWidth" in self.dust_program: self.dust_program["u_dustWidth"].value = 0.25
-            if "u_dustArmOffset" in self.dust_program: self.dust_program["u_dustArmOffset"].value = -0.15
+            if "u_dustArmOffset" in self.dust_program: self.dust_program["u_dustArmOffset"].value = -0.12
             if "u_dustNoiseScale" in self.dust_program: self.dust_program["u_dustNoiseScale"].value = 0.8
-            if "u_dustDensity" in self.dust_program: self.dust_program["u_dustDensity"].value = 2.0
+            if "u_dustDensity" in self.dust_program: self.dust_program["u_dustDensity"].value = 2.5
+            
+            # New upgraded dust params
+            if "u_dustHeightScale" in self.dust_program: self.dust_program["u_dustHeightScale"].value = 1.0
+            if "u_dustLaneWidth" in self.dust_program: self.dust_program["u_dustLaneWidth"].value = 0.06
+            if "u_dustDiffuseWidth" in self.dust_program: self.dust_program["u_dustDiffuseWidth"].value = 0.18
+            if "u_camDist" in self.dust_program: self.dust_program["u_camDist"].value = dist
             
             self.dust_vao.render(mode=self.ctx.TRIANGLE_STRIP)
 
@@ -596,10 +665,16 @@ class MilkyWaySimulation(mglw.WindowConfig):
         
         self.scene_tex.use(location=0)
         self.dust_tex.use(location=1)
+        self.depth_tex.use(location=2)
         self.comp_program["u_scene"].value = 0
         self.comp_program["u_dust"].value = 1
+        self.comp_program["u_sceneDepth"].value = 2
         if "u_debugDust" in self.comp_program:
             self.comp_program["u_debugDust"].value = self.debug_dust
+        if "u_nearPlane" in self.comp_program:
+            self.comp_program["u_nearPlane"].value = 0.01
+        if "u_farPlane" in self.comp_program:
+            self.comp_program["u_farPlane"].value = 10000.0
         self.comp_vao.render(mode=self.ctx.TRIANGLE_STRIP)
 
         # ----------------------------------------------------------

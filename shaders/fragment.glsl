@@ -2,15 +2,19 @@
 
 uniform float aspectRatio;
 uniform float u_time;
-uniform float u_diskSquish;
 uniform float u_innerDisk;
 uniform float u_outerDisk;
-uniform float u_azimuth;
 uniform float u_camDistance;
 uniform float u_lodDetail;
 uniform float u_volumetricDetail;
 uniform float u_diskThickness;
 uniform float u_proceduralStarWeight;
+
+// Real camera basis from Python (position is in BH-local space)
+uniform vec3 u_cameraPosition;
+uniform vec3 u_cameraForward;
+uniform vec3 u_cameraRight;
+uniform vec3 u_cameraUp;
 
 in vec2 frag_pos;
 out vec4 fragColor;
@@ -72,24 +76,14 @@ void main()
 {
     vec2 uv = vec2(frag_pos.x * aspectRatio, frag_pos.y);
 
-    // 1. 3D CAMERA SETUP
+    // 1. 3D CAMERA SETUP — uses real camera from Python
     float Rs = 1.0;
 
-    float cam_height = mix(0.1, 5.0, max(u_diskSquish, 0.02));
-    float cam_radius = u_camDistance * 12.0;  // Scale the base distance of 12.0
-
-    vec3 ray_origin = vec3(
-        sin(u_azimuth) * cam_radius,
-        cam_height,
-        cos(u_azimuth) * cam_radius
-    );
-
-    vec3 forward = normalize(vec3(0.0) - ray_origin);
-    vec3 right = normalize(cross(vec3(0.0, 1.0, 0.0), forward));
-    vec3 up = cross(forward, right);
+    vec3 ray_origin = u_cameraPosition;
+    float cam_radius = length(ray_origin);
 
     float fov_zoom = 2.0; 
-    vec3 ray_dir = normalize(forward * fov_zoom + uv.x * right + uv.y * up);
+    vec3 ray_dir = normalize(u_cameraForward * fov_zoom + uv.x * u_cameraRight + uv.y * u_cameraUp);
 
     // 2. PHYSICS ENGINE & VOLUMETRIC VARIABLES
     float dt = mix(0.2, 0.1, u_lodDetail);        
@@ -129,7 +123,7 @@ void main()
         if (abs(p.y) < 0.5 && r > 2.5 && r < 12.0) {
             
             // Keplerian Rotation: inner gas orbits much faster than outer gas
-            float orbital_velocity = 2.0 * pow(r, -1.5); 
+            float orbital_velocity = 8.0 * pow(r, -1.5); 
             float angle = atan(p.z, p.x) + u_time * orbital_velocity;
             
             // Rotate the sampling coordinates to simulate fluid motion
@@ -141,7 +135,7 @@ void main()
             float radial_falloff = smoothstep(2.5, 4.0, r) * (1.0 - smoothstep(8.0, 12.0, r));
             
             // Apply 3D turbulent noise to the rotating volume
-            float noise = fbm3D(sampling_pos * 1.5 - vec3(0.0, u_time * 0.2, 0.0));
+            float noise = fbm3D(sampling_pos * 1.5 - vec3(0.0, u_time * 1.0, 0.0));
             // Fade out noise as volumetric detail goes down
             noise = mix(1.0, noise, max(u_volumetricDetail, 0.01));
             
@@ -174,7 +168,7 @@ void main()
         // Distance-aware adaptive step size to bridge the empty space between the camera and the disk.
         // Active only when camera.distance is between 3.0 and 9.0.
         float current_dt = dt;
-        float t_fix = smoothstep(2.8, 3.2, u_camDistance) * (1.0 - smoothstep(9.0, 10.5, u_camDistance));
+        float t_fix = smoothstep(2.0, 2.3, u_camDistance) * (1.0 - smoothstep(9.0, 10.5, u_camDistance));
         
         if (t_fix > 0.001 && r > 12.0) {
             float empty_space = max(0.0, cam_radius - 12.0);
@@ -200,21 +194,27 @@ void main()
     }
 
     // 4. FINAL COMPOSITING
-    vec3 final_color = vec3(0.0);
+    //
+    // Output convention for blend mode (ONE, SRC_ALPHA):
+    //   result = fragColor.rgb * 1 + background * fragColor.a
+    //
+    // fragColor.rgb = emission (gas accumulated along ray)
+    // fragColor.a   = transmittance (how much background shows through)
 
     if (hit_black_hole) {
-        // Event horizon is pure black, but we add the gas we saw on the way in
-        final_color = accumulated_gas_color; 
+        // Event horizon: pure black behind accumulated gas.
+        // transmittance = 0 ensures NO background stars bleed through.
+        fragColor = vec4(accumulated_gas_color, 0.0);
     } else {
+        // Procedural background stars (only when not fully covered by 3D stars)
         vec2 sky_uv = vec2(atan(v.z, v.x), asin(clamp(v.y, -1.0, 1.0)));
         vec3 background_stars = get_stars(sky_uv * 10.0) * u_proceduralStarWeight;
-        
-        // We multiply the procedural background stars by the transmittance,
-        // and add the glowing gas.
-        final_color = (background_stars * transmittance) + accumulated_gas_color;
-    }
 
-    // Output final color and the mask transmittance in the alpha channel
-    // for correct hardware compositing over the 3D star layer.
-    fragColor = vec4(final_color, transmittance);
+        // Gas emission + attenuated procedural stars
+        vec3 final_color = (background_stars * transmittance) + accumulated_gas_color;
+
+        // Output: emission in RGB, transmittance in alpha
+        // The 3D star layer underneath will be multiplied by this transmittance
+        fragColor = vec4(final_color, transmittance);
+    }
 }

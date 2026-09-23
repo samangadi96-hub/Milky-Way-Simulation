@@ -7,6 +7,10 @@ class Camera:
     Camera controlling the viewing perspective of the Milky Way simulation.
     Supports smooth mouse-driven orbit (inclination + azimuth) with inertia,
     scroll-wheel zoom, and keyboard fallback controls.
+
+    All accessors (get_position, get_target, get_forward, get_right, get_up,
+    get_view_matrix) describe the SAME camera.  Basis vectors are cached once
+    per frame in update() to avoid redundant trig.
     """
 
     # -----------------------------------------------------------------------
@@ -39,6 +43,9 @@ class Camera:
     INCL_MIN = 0.0
     INCL_MAX = math.radians(89.0)
 
+    # Pan sensitivity (world units per pixel)
+    PAN_SENSITIVITY = 0.003
+
     def __init__(self):
 
         # ------------------------------------------------------------------
@@ -58,65 +65,97 @@ class Camera:
         self.target_distance = 1.0
 
         # ------------------------------------------------------------------
+        # Pan state — offset applied to the lookAt target
+        # ------------------------------------------------------------------
+        self._pan_target = glm.vec3(0.0, 0.0, 0.0)
+
+        # ------------------------------------------------------------------
         # Mouse drag state
         # ------------------------------------------------------------------
-        self._dragging      = False
-        self._last_mouse_x  = 0
-        self._last_mouse_y  = 0
+        self._dragging       = False   # left button orbit
+        self._panning        = False   # middle button pan
+        self._last_mouse_x   = 0
+        self._last_mouse_y   = 0
 
         # Angular velocity kept alive by inertia after drag ends
-        self._vel_azimuth   = 0.0   # radians / second
-        self._vel_inclination = 0.0  # radians / second
+        self._vel_azimuth     = 0.0   # radians / second
+        self._vel_inclination = 0.0   # radians / second
 
         # ------------------------------------------------------------------
         # Derived shader value
         # ------------------------------------------------------------------
         self.disk_squish = math.cos(self.inclination)
 
+        # ------------------------------------------------------------------
+        # Cached per-frame basis vectors (set in update())
+        # ------------------------------------------------------------------
+        self._eye     = glm.vec3(0.0, 1.0, 0.0)
+        self._target_pt = glm.vec3(0.0, 0.0, 0.0)
+        self._forward = glm.vec3(0.0, 0.0, -1.0)
+        self._right   = glm.vec3(1.0, 0.0, 0.0)
+        self._up      = glm.vec3(0.0, 1.0, 0.0)
+        self._view_matrix = glm.mat4(1.0)
+
+        # Initialise the cache
+        self._recompute_basis()
+
     # ==========================================================================
     # Mouse events  (call these from main.py)
     # ==========================================================================
 
     def on_mouse_press(self, x: int, y: int, button: int):
-        """Begin a drag orbit when the left mouse button is pressed."""
-        if button == 1:  # left button
+        """Begin a drag orbit (left) or pan (middle) when the button is pressed."""
+        if button == 1:  # left button — orbit
             self._dragging      = True
             self._last_mouse_x  = x
             self._last_mouse_y  = y
             # Kill inertia when user grabs again
             self._vel_azimuth    = 0.0
             self._vel_inclination = 0.0
+        elif button == 4:  # middle button — pan
+            self._panning       = True
+            self._last_mouse_x  = x
+            self._last_mouse_y  = y
 
     def on_mouse_release(self, x: int, y: int, button: int):
         """End drag; inertia will coast the galaxy naturally."""
         if button == 1:
             self._dragging = False
+        elif button == 4:
+            self._panning = False
 
-    def on_mouse_drag(self, x: int, y: int, dx: int, dy: int, buttons: int):
+    def on_mouse_drag(self, x: int, y: int, dx: int, dy: int):
         """
         Called every frame while any mouse button is held.
         dx / dy are pixel deltas since the last call.
         """
-        if not self._dragging:
-            return
+        if self._dragging:
+            # Compute angular deltas
+            d_azimuth    = -dx * self.MOUSE_SENSITIVITY_X
+            d_inclination =  dy * self.MOUSE_SENSITIVITY_Y
 
-        # Compute angular deltas
-        d_azimuth    = -dx * self.MOUSE_SENSITIVITY_X
-        d_inclination =  dy * self.MOUSE_SENSITIVITY_Y
+            # Apply directly to the *targets* for instant but smooth response
+            self.target_azimuth    += d_azimuth
+            self.target_inclination = self._clamp_incl(
+                self.target_inclination + d_inclination
+            )
 
-        # Apply directly to the *targets* for instant but smooth response
-        self.target_azimuth    += d_azimuth
-        self.target_inclination = self._clamp_incl(
-            self.target_inclination + d_inclination
-        )
+            # Store per-pixel velocity (converted to per-second in update)
+            # We'll accumulate it here; _update_inertia divides by dt once
+            self._vel_azimuth    = d_azimuth
+            self._vel_inclination = d_inclination
 
-        # Store per-pixel velocity (converted to per-second in update)
-        # We'll accumulate it here; _update_inertia divides by dt once
-        self._vel_azimuth    = d_azimuth
-        self._vel_inclination = d_inclination
+            self._last_mouse_x = x
+            self._last_mouse_y = y
 
-        self._last_mouse_x = x
-        self._last_mouse_y = y
+        if self._panning:
+            # Pan in camera-space: move the lookAt target along right/up
+            pan_scale = self.PAN_SENSITIVITY * self.distance
+            self._pan_target += self._right * (-dx * pan_scale)
+            self._pan_target += self._up    * ( dy * pan_scale)
+
+            self._last_mouse_x = x
+            self._last_mouse_y = y
 
     def on_mouse_scroll(self, x: int, y: int, x_offset: float, y_offset: float):
         """Scroll wheel zooms smoothly in/out using logarithmic scale."""
@@ -201,6 +240,11 @@ class Camera:
         # ------------------------------------------------------------------
         self.disk_squish = max(0.02, math.cos(self.inclination))
 
+        # ------------------------------------------------------------------
+        # Recompute cached basis vectors for this frame
+        # ------------------------------------------------------------------
+        self._recompute_basis()
+
     # ==========================================================================
     # Internal helpers
     # ==========================================================================
@@ -209,27 +253,36 @@ class Camera:
         # Don't clamp completely to 0.0 to avoid gimbal lock with lookAt
         return max(0.001, min(self.INCL_MAX, v))
 
-    # ==========================================================================
-    # Matrix Generation
-    # ==========================================================================
-
-    def get_view_matrix(self) -> glm.mat4:
-        # Convert inclination/azimuth to 3D Cartesian coordinates
+    def _recompute_basis(self):
+        """Compute and cache eye position, target, and basis vectors."""
+        # Spherical → Cartesian
         y = self.distance * math.cos(self.inclination)
         r = self.distance * math.sin(self.inclination)
         x = r * math.sin(self.azimuth)
         z = r * math.cos(self.azimuth)
 
-        pos = glm.vec3(x, y, z)
-        target = glm.vec3(0.0, 0.0, 0.0)
-        
-        # Up vector
-        up = glm.vec3(0.0, 1.0, 0.0)
-        # If camera is looking straight down, change up vector
-        if abs(math.cos(self.inclination)) > 0.999:
-            up = glm.vec3(0.0, 0.0, -1.0)
+        self._target_pt = glm.vec3(self._pan_target)
+        self._eye = glm.vec3(x, y, z) + self._target_pt
 
-        return glm.lookAt(pos, target, up)
+        # Up vector
+        world_up = glm.vec3(0.0, 1.0, 0.0)
+        if abs(math.cos(self.inclination)) > 0.999:
+            world_up = glm.vec3(0.0, 0.0, -1.0)
+
+        # Forward, right, up — consistent with lookAt
+        self._forward = glm.normalize(self._target_pt - self._eye)
+        self._right   = glm.normalize(glm.cross(self._forward, world_up))
+        self._up      = glm.cross(self._right, self._forward)
+
+        # View matrix (uses the same eye/target/up)
+        self._view_matrix = glm.lookAt(self._eye, self._target_pt, world_up)
+
+    # ==========================================================================
+    # Matrix Generation
+    # ==========================================================================
+
+    def get_view_matrix(self) -> glm.mat4:
+        return self._view_matrix
 
     def get_projection_matrix(self, aspect_ratio: float) -> glm.mat4:
         fov = math.radians(45.0)
@@ -242,11 +295,19 @@ class Camera:
         return self.distance
 
     def get_position(self):
-        y = self.distance * math.cos(self.inclination)
-        r = self.distance * math.sin(self.inclination)
-        x = r * math.sin(self.azimuth)
-        z = r * math.cos(self.azimuth)
-        return (x, y, z)
+        return (self._eye.x, self._eye.y, self._eye.z)
+
+    def get_target(self):
+        return (self._target_pt.x, self._target_pt.y, self._target_pt.z)
+
+    def get_forward(self):
+        return (self._forward.x, self._forward.y, self._forward.z)
+
+    def get_right(self):
+        return (self._right.x, self._right.y, self._right.z)
+
+    def get_up(self):
+        return (self._up.x, self._up.y, self._up.z)
 
     def reset(self):
         self.target_inclination = math.radians(75.0)
@@ -254,3 +315,4 @@ class Camera:
         self.target_distance = 1.0
         self._vel_azimuth = 0.0
         self._vel_inclination = 0.0
+        self._pan_target = glm.vec3(0.0, 0.0, 0.0)

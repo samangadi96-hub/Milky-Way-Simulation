@@ -4,6 +4,21 @@ class BlackHole:
     of the central supermassive black hole.
     """
 
+    # ------------------------------------------------------------------
+    # World-scale contract
+    # ------------------------------------------------------------------
+    # The black-hole raymarch operates in its own local coordinate system
+    # where the accretion disk spans radii ~2.5–12.0.  Galaxy world-space
+    # positions (where camera.distance=1 means "close") are multiplied by
+    # this factor to enter black-hole local space.
+    #
+    #   bh_local_pos = world_pos * BLACK_HOLE_LOCAL_SCALE
+    #
+    # This is the SINGLE authoritative conversion factor.  Do NOT hard-code
+    # 12.0 in shaders or other Python files.
+    # ------------------------------------------------------------------
+    BLACK_HOLE_LOCAL_SCALE = 12.0
+
     def __init__(
         self,
         radius=0.05,
